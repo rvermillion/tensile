@@ -30,6 +30,10 @@ def promote_types(a: DType, b: DType) -> DType:
 def broadcast_shapes(a: Shape, b: Shape) -> Shape:
     if a == b:
         return a
+    if not a:
+        return b
+    if not b:
+        return a
     m = -min(len(a), len(b))
     i = -1
     shape = []
@@ -64,10 +68,21 @@ def broadcast_shapes(a: Shape, b: Shape) -> Shape:
 
 class TensorOp:
 
-    __slots__ = ()
+    __slots__ = ('shape', 'dtype')
 
     name: str
     arity: int
+    args: tuple[TensorType, ...]
+    shape: Shape
+    dtype: DType
+
+    def __init__(self, shape: Shape, dtype: DType):
+        self.shape = shape
+        self.dtype = dtype
+
+    @property
+    def args(self) -> tuple[TensorType, ...]:
+        raise NotImplementedError()
 
     def gen_name(self, args: Sequence[TensorType]) -> str:
         name = self.name + '(' + ', '.join(arg.name for arg in args)
@@ -83,16 +98,11 @@ class TensorOp:
     def _options(self, opts: dict[str, Any]) -> None:
         pass
 
-    def structure(self, args: Sequence[TensorType]) -> Structure:
-        raise NotImplementedError()
+    def structure(self) -> Structure:
+        return self.shape, self.dtype
 
-    def evaluate(self, args: Sequence[TensorType], index: Array = None) -> Array:
+    def evaluate(self, index: Array = None) -> Array:
         raise NotImplementedError()
-
-    # def derive(self, args: Sequence[TensorType]) -> TensorDerivation:
-    #     return self.Derivation(self, args)
-    #
-    # Derivation = TensorDerivation
 
     @classmethod
     def compile(cls, *args: TensorType, **kwargs) -> Self:
@@ -125,25 +135,24 @@ AxisChoice: TypeAlias = Union[None, int, Sequence[int]]
 
 class UnaryOp(TensorOp):
 
-    __slots__ = ()
+    __slots__ = ('arg',)
 
     arity = 1
 
+    arg: TensorType
 
-    def structure(self, args: Sequence[TensorType]) -> Structure:
-        if len(args) == 1:
-            return self._structure(*args)
-        raise ValueError(f'Expected one arguments for {self}')
+    def __init__(self, arg: TensorType, shape: Shape, dtype: DType):
+        super().__init__(shape=shape, dtype=dtype)
+        self.arg = arg
 
-    def _structure(self, a: TensorType) -> Structure:
-        raise NotImplementedError()
+    @property
+    def args(self) -> tuple[TensorType, ...]:
+        return self.arg,
 
-    def evaluate(self, args: Sequence[TensorType], index: Array = None) -> Array:
-        if len(args) == 1:
-            a = args[0].get()
-            self.print_evaluating(a, index=index)
-            return self._evaluate(a, index=index)
-        raise ValueError(f'Expected one arguments for {self}')
+    def evaluate(self, index: Array = None) -> Array:
+        a = self.arg.get()
+        self.print_evaluating(a, index=index)
+        return self._evaluate(a, index=index)
 
     def _evaluate(self, a: Array, index: Array = None) -> Array:
         raise NotImplementedError()
@@ -155,26 +164,21 @@ def can_broadcast(from_shape: Shape, to_shape: Shape) -> bool:
 
 class BroadcastOp(UnaryOp):
 
-    __slots__ = ('shape', )
-
-    shape: Shape
+    __slots__ = ()
 
     name = 'broadcast'
-
-    def __init__(self, shape: Shape):
-        self.shape = shape
 
     def _options(self, opts: dict[str, Any]) -> None:
         opts['shape'] = self.shape
 
-    def _structure(self, a: TensorType) -> Structure:
-        shape = self.shape
-        if can_broadcast(a.shape, shape):
-            return shape, a.dtype
-        raise ValueError(f'Cannot broadcast: {a.shape} -> {shape}')
-
     def _evaluate(self, a: Array, index: Array = None) -> Array:
         return ten.broadcast_to(a, self.shape)
+
+    @classmethod
+    def _compile(cls, arg: TensorType, *, shape: Shape = None, **kwargs) -> Self:
+        if can_broadcast(arg.shape, shape):
+            return cls(arg, shape=shape, dtype=arg.dtype)
+        raise ValueError(f'Cannot broadcast: {arg.shape} -> {shape}')
 
 
 def can_reshape(from_shape: Shape, to_shape: Shape) -> bool:
@@ -183,46 +187,133 @@ def can_reshape(from_shape: Shape, to_shape: Shape) -> bool:
 
 class ReshapeOp(UnaryOp):
 
-    __slots__ = ('shape', )
-
-    shape: Shape
+    __slots__ = ()
 
     name = 'reshape'
-
-    def __init__(self, shape: Shape):
-        self.shape = shape
 
     def _options(self, opts: dict[str, Any]) -> None:
         opts['shape'] = self.shape
 
-    def _structure(self, a: TensorType) -> Structure:
-        shape = self.shape
-        if can_reshape(a.shape, shape):
-            return shape, a.dtype
-        raise ValueError(f'Cannot reshape: {a.shape} -> {shape}')
-
     def _evaluate(self, a: Array, index: Array = None) -> Array:
         return ten.reshape(a, self.shape)
 
+    @classmethod
+    def _compile(cls, arg: TensorType, *, shape: Shape = None, **kwargs) -> Self:
+        if can_reshape(arg.shape, shape):
+            return cls(arg, shape=shape, dtype=arg.dtype)
+        raise ValueError(f'Cannot reshape: {arg.shape} -> {shape}')
 
-class SliceOp(UnaryOp):
+
+class SubscriptOp(UnaryOp):
 
     __slots__ = ('indices', )
 
     indices: Indices
 
-    def __init__(self, indices: Indices):
+    def __init__(self, arg: TensorType, indices: Indices, shape: Shape, dtype: DType):
+        super().__init__(arg, shape, dtype)
         self.indices = indices
 
     def _options(self, opts: dict[str, Any]) -> None:
         opts['indices'] = self.indices
 
-    def _structure(self, a: TensorType) -> Structure:
-        raise NotImplementedError()
-        # return self.shape, a.dtype
-
     def _evaluate(self, a: Array, index: Array = None) -> Array:
         return a[self.indices]
+
+    @classmethod
+    def _compile(cls, arg: TensorType, *, indices: Indices = None, **kwargs) -> Self:
+        shape = arg.shape
+        return cls(arg, indices, shape=shape, dtype=arg.dtype)
+
+
+class ElementWiseUnaryOp(UnaryOp):
+
+    __slots__ = ()
+
+    @classmethod
+    def _compile(cls, arg: TensorType, **kwargs) -> Self:
+        return cls(arg, shape=arg.shape, dtype=cls._compile_dtype(arg))
+
+    @classmethod
+    def _compile_dtype(cls, arg: TensorType) -> DType:
+        return arg.dtype
+
+
+class ExpOp(ElementWiseUnaryOp):
+
+    __slots__ = ()
+
+    name = 'exp'
+
+    def _evaluate(self, a: Array, index: Array = None) -> Array:
+        return ten.exp(a if index is None else a[index])
+
+
+class ExpM1Op(ElementWiseUnaryOp):
+
+    __slots__ = ()
+
+    name = 'expm1'
+
+    def _evaluate(self, a: Array, index: Array = None) -> Array:
+        return ten.expm1(a if index is None else a[index])
+
+
+class LogOp(ElementWiseUnaryOp):
+
+    __slots__ = ()
+
+    name = 'log'
+
+    def _evaluate(self, a: Array, index: Array = None) -> Array:
+        return ten.log(a if index is None else a[index])
+
+
+class SqrtOp(ElementWiseUnaryOp):
+
+    __slots__ = ()
+
+    name = 'sqrt'
+
+    def _evaluate(self, a: Array, index: Array = None) -> Array:
+        return ten.sqrt(a if index is None else a[index])
+
+
+class SquareOp(ElementWiseUnaryOp):
+
+    __slots__ = ()
+
+    name = 'square'
+
+    def _evaluate(self, a: Array, index: Array = None) -> Array:
+        return ten.square(a if index is None else a[index])
+
+
+class FloorOp(ElementWiseUnaryOp):
+
+    __slots__ = ()
+
+    name = 'floor'
+
+    def _evaluate(self, a: Array, index: Array = None) -> Array:
+        return ten.floor(a if index is None else a[index])
+
+
+
+
+def reduce_shape(shape: Shape, axis: AxisChoice, keepdims: bool) -> Shape:
+    if axes := axis:
+        if keepdims:
+            reduced = list(shape)
+            for a in axes:
+                reduced[a] = 1
+            return tuple(reduced)
+        else:
+            reduced: list[Optional[int]] = list(shape)
+            for a in axes:
+                reduced[a] = None
+            return tuple(a for a in reduced if a is not None)
+    return 1,
 
 
 class ReduceOp(UnaryOp):
@@ -232,8 +323,9 @@ class ReduceOp(UnaryOp):
     axis: Optional[tuple[int, ...]]
     keepdims: bool
 
-    def __init__(self, axis: AxisChoice = None, keepdims: bool = False):
-        self.axis = (axis, ) if isinstance(axis, int) else tuple(axis) if axis else None
+    def __init__(self, arg: TensorType, shape: Shape, dtype: DType, axis: Optional[tuple[int, ...]], keepdims: bool):
+        super().__init__(arg, shape, dtype)
+        self.axis = axis
         self.keepdims = keepdims
 
     def _options(self, opts: dict[str, Any]) -> None:
@@ -242,25 +334,17 @@ class ReduceOp(UnaryOp):
         if self.keepdims:
             opts['keepdims'] = self.keepdims
 
-    def _reduce_shape(self, shape: Shape) -> Shape:
-        if axes := self.axis:
-            if self.keepdims:
-                reduced = list(shape)
-                for a in axes:
-                    reduced[a] = 1
-                return tuple(reduced)
-            else:
-                reduced: list[Optional[int]] = list(shape)
-                for a in axes:
-                    reduced[a] = None
-                return tuple(a for a in reduced if a is not None)
-        return 1,
+    @classmethod
+    def _compile(cls, arg: TensorType, *, axis: AxisChoice = None, keepdims: bool = False, **kwargs) -> Self:
+        axis = (axis, ) if isinstance(axis, int) else tuple(axis) if axis else None
+        if axis:
+            ndims = len(arg.shape)
+            axis = tuple(ndims + a if a < 0 else a for a in axis)
+            if not all(0 <= a < ndims for a in axis):
+                raise ValueError(f"Axis {axis} out of bounds for shape {arg.shape}")
 
-    def _structure(self, a: TensorType) -> Structure:
-        return self._reduce_shape(a.shape), a.dtype
-
-    def _evaluate(self, a: Array, index: Array = None) -> Array:
-        raise NotImplementedError()
+        shape = reduce_shape(arg.shape, axis, keepdims)
+        return cls(arg, axis=axis, shape=shape, dtype=arg.dtype, keepdims=keepdims)
 
 
 class MinOp(ReduceOp):
@@ -315,25 +399,27 @@ class SumOp(ReduceOp):
 
 class BinaryOp(TensorOp):
 
-    __slots__ = ()
+    __slots__ = ('left', 'right')
 
     arity = 2
 
-    def structure(self, args: Sequence[TensorType]) -> Structure:
-        if len(args) == 2:
-            return self._structure(*args)
-        raise ValueError(f'Expected two arguments for {self}')
+    left: TensorType
+    right: TensorType
 
-    def _structure(self, a: TensorType, b: TensorType) -> Structure:
-        raise NotImplementedError()
+    def __init__(self, left: TensorType, right: TensorType, shape: Shape, dtype: DType):
+        super().__init__(shape, dtype)
+        self.left = left
+        self.right = right
 
-    def evaluate(self, args: Sequence[TensorType], index: Array = None) -> Array:
-        if len(args) == 2:
-            a = args[0].get()
-            b = args[1].get()
-            self.print_evaluating(a, b, index=index)
-            return self._evaluate(a, b, index=index)
-        raise ValueError(f'Expected two arguments for {self}')
+    @property
+    def args(self) -> tuple[TensorType, ...]:
+        return self.left, self.right
+
+    def evaluate(self, index: Array = None) -> Array:
+        left = self.left.get()
+        right = self.right.get()
+        self.print_evaluating(left, right, index=index)
+        return self._evaluate(left, right, index=index)
 
     def _evaluate(self, a: Array, b: Array, index: Array = None) -> Array:
         raise NotImplementedError()
@@ -347,36 +433,86 @@ class MatMulOp(BinaryOp):
 
     __slots__ = ()
 
-    def _structure(self, a: TensorType, b: TensorType) -> Structure:
-        ashape = a.shape
-        if ashape[-1] != b.shape[-2]:
-            raise ValueError(f'Shape mismatch for {self}: {a.shape} != {b.shape}')
-        # return ashape, ten.promote_types(a.dtype, b.dtype)
-        # ashape = ten.broadcast_shapes(a.ashape, b.ashape)
-        shape = ashape[:-1] + (b.shape[-1],)
-        return shape, promote_types(a.dtype, b.dtype)  # ten.promote_types(a.dtype, b.dtype)
+    name = 'matmul'
 
     def _evaluate(self, a: Array, b: Array, index: Array = None) -> Array:
         if index is None:
             return a @ b
         return a[index] @ b[index]
 
+    @classmethod
+    def _compile(cls, left: TensorType, right: TensorType, **kwargs) -> Self:
+        ls = left.shape
+        rs = right.shape
+        if len(ls) == 1:
+            ls = 1, ls[0]
+        if len(rs) == 1:
+            rs = rs[0], 1
+        if ls[-1] != rs[-2]:
+            raise ValueError(f'Shape mismatch for {cls.name}: {ls} != {rs}')
+        shape = broadcast_shapes(ls[:-2], rs[:-2]) + (ls[-2], rs[-1])
+        dtype = promote_types(left.dtype, right.dtype)  # ten.promote_types(a.dtype, b.dtype)
+        return cls(left, right, shape=shape, dtype=dtype)
+
 
 class ElementWiseBinaryOp(BinaryOp):
 
     __slots__ = ()
 
-    def _structure(self, a: TensorType, b: TensorType) -> Structure:
-        shape = a.shape
-        if shape != b.shape:
-            shape = broadcast_shapes(shape, b.shape)
-            # raise ValueError(f'Shape mismatch for {self}: {a.shape} != {b.shape}')
-        # return shape, ten.promote_types(a.dtype, b.dtype)
-        # shape = ten.broadcast_shapes(a.shape, b.shape)
-        return shape, a.dtype  # ten.promote_types(a.dtype, b.dtype)
+    @classmethod
+    def _compile(cls, left: TensorType, right: TensorType, **kwargs) -> Self:
+        ls = left.shape
+        rs = right.shape
+        if ls != rs:
+            shape = broadcast_shapes(ls, rs)
+            if shape != ls:
+                left = left.broadcast(shape)
+            if shape != rs:
+                right = right.broadcast(shape)
+        else:
+            shape = ls
+        dtype = cls._promote_types(left.dtype, right.dtype)
+        return cls(left, right, shape=shape, dtype=dtype)
+
+    @classmethod
+    def _promote_types(cls, left: DType, right: DType) -> DType:
+        return promote_types(left, right)
 
     # def update(self, tensor: 'EventTensor', event: TensorEvent, arg_index: int) -> Optional[TensorEvent]:
     #     tensor.data = None
+
+
+class CompareOp(ElementWiseBinaryOp):
+
+    __slots__ = ()
+
+    @classmethod
+    def _promote_types(cls, left: DType, right: DType) -> DType:
+        return ten.bool_
+
+
+class GreaterOp(CompareOp):
+
+    __slots__ = ()
+
+    name = 'greater'
+
+    def _evaluate(self, a: Array, b: Array, index: Array = None) -> Array:
+        if index is None:
+            return a > b
+        return a[index] > b[index]
+
+
+class GreaterEqualOp(CompareOp):
+
+    __slots__ = ()
+
+    name = 'greater_equal'
+
+    def _evaluate(self, a: Array, b: Array, index: Array = None) -> Array:
+        if index is None:
+            return a >= b
+        return a[index] >= b[index]
 
 
 class AddOp(ElementWiseBinaryOp):
@@ -407,6 +543,17 @@ class AddOp(ElementWiseBinaryOp):
     #                 data[idx] += delta
     #
     #     return event
+
+class SubOp(ElementWiseBinaryOp):
+
+    __slots__ = ()
+
+    name = 'sub'
+
+    def _evaluate(self, a: Array, b: Array, index: Array = None) -> Array:
+        if index is None:
+            return a - b
+        return a[index] - b[index]
 
 
 class MulOp(ElementWiseBinaryOp):
@@ -440,64 +587,59 @@ class MulOp(ElementWiseBinaryOp):
     #     return None
 
 
-add = AddOp()
-mul = MulOp()
-matmul = MatMulOp()
-default_sum = SumOp()
-default_min = MinOp()
-default_max = MaxOp()
-default_mean = MeanOp()
-
-
 class TensorOps:
 
     @staticmethod
-    def add() -> AddOp:
-        return add
+    def greater(left: TensorType, right: TensorType) -> GreaterOp:
+        return GreaterOp.compile(left, right)
 
     @staticmethod
-    def mul() -> MulOp:
-        return mul
+    def greater_equal(left: TensorType, right: TensorType) -> GreaterEqualOp:
+        return GreaterEqualOp.compile(left, right)
 
     @staticmethod
-    def matmul() -> MatMulOp:
-        return matmul
+    def add(left: TensorType, right: TensorType) -> AddOp:
+        return AddOp.compile(left, right)
 
     @staticmethod
-    def broadcast(*, shape: Shape) -> BroadcastOp:
-        return BroadcastOp(shape)
+    def sub(left: TensorType, right: TensorType) -> SubOp:
+        return SubOp.compile(left, right)
 
     @staticmethod
-    def reshape(*, shape: Shape) -> ReshapeOp:
-        return ReshapeOp(shape)
+    def mul(left: TensorType, right: TensorType) -> MulOp:
+        return MulOp.compile(left, right)
 
     @staticmethod
-    def slice(*, indices: Indices) -> SliceOp:
-        return SliceOp(indices)
+    def matmul(left: TensorType, right: TensorType) -> MatMulOp:
+        return MatMulOp.compile(left, right)
 
     @staticmethod
-    def min(*, axis: AxisChoice = None, keepdims: bool = False) -> ReduceOp:
-        if axis is None and not keepdims:
-            return default_min
-        return MinOp(axis, keepdims)
+    def broadcast(arg: TensorType, *, shape: Shape) -> BroadcastOp:
+        return BroadcastOp.compile(arg, shape=shape)
 
     @staticmethod
-    def max(*, axis: AxisChoice = None, keepdims: bool = False) -> ReduceOp:
-        if axis is None and not keepdims:
-            return default_max
-        return MaxOp(axis, keepdims)
+    def reshape(arg: TensorType, *, shape: Shape) -> ReshapeOp:
+        return ReshapeOp.compile(arg, shape=shape)
 
     @staticmethod
-    def mean(*, axis: AxisChoice = None, keepdims: bool = False) -> ReduceOp:
-        if axis is None and not keepdims:
-            return default_mean
-        return MeanOp(axis, keepdims)
+    def subscript(arg: TensorType, *, indices: Indices) -> SubscriptOp:
+        return SubscriptOp.compile(arg, indices=indices)
 
     @staticmethod
-    def sum(*, axis: AxisChoice = None, keepdims: bool = False) -> ReduceOp:
-        if axis is None and not keepdims:
-            return default_sum
-        return SumOp(axis, keepdims)
+    def min(arg: TensorType, *, axis: AxisChoice = None, keepdims: bool = False) -> ReduceOp:
+        return MinOp.compile(arg, axis=axis, keepdims=keepdims)
+
+    @staticmethod
+    def max(arg: TensorType, *, axis: AxisChoice = None, keepdims: bool = False) -> ReduceOp:
+        return MaxOp.compile(arg, axis=axis, keepdims=keepdims)
+
+    @staticmethod
+    def mean(arg: TensorType, *, axis: AxisChoice = None, keepdims: bool = False) -> ReduceOp:
+        return MeanOp.compile(arg, axis=axis, keepdims=keepdims)
+
+    @staticmethod
+    def sum(arg: TensorType, *, axis: AxisChoice = None, keepdims: bool = False) -> ReduceOp:
+        return SumOp.compile(arg, axis=axis, keepdims=keepdims)
 
 __all__ = [
     'TensorOp', 'TensorOps',
