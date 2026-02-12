@@ -1,0 +1,228 @@
+#  Copyright (c) 2025. Fulcrum Analytics, Inc. All Rights Reserved.
+#  This file is part of the Fulcrum Impact product and the property of Fulcrum Analytics, Inc.
+#  WARNING: CONFIDENTIAL TRADE SECRETS OF FULCRUM ANALYTICS, INC.
+#  UNAUTHORIZED COPYING, DISTRIBUTION, OR DISCLOSURE IS STRICTLY PROHIBITED
+
+from typing import Any, Literal, Sequence, TypeAlias, TypeGuard, Union
+
+import mlx.core as mx
+import mlx.core.random as mxr
+import numpy as np
+
+from .common import *
+
+Array: TypeAlias = mx.array
+DType: TypeAlias = mx.Dtype
+
+DTypeLike: TypeAlias = Union[DType, str, type]
+MaybeTuple: TypeAlias = Union[T, tuple[T, ...]]
+AxisSelector: TypeAlias = Union[int, slice, 'Array', Ellipsis, None]
+Selector: TypeAlias = MaybeTuple[AxisSelector]
+ArrayLike: TypeAlias = Union['Array', Scalar, Sequence['ArrayLike'], np.ndarray]
+ArrayOrScalar: TypeAlias = Union['Array', S]
+ArrayOrT: TypeAlias = Union['Array', T, Sequence[T]]
+ArrayOrFloat: TypeAlias = ArrayOrT[float]
+
+
+def to_shape(size: ShapeLike) -> Shape:
+    return (size, ) if isinstance(size, int) else size
+
+
+class RNG:
+
+    __slots__ = 'key',
+
+    def __init__(self, key = None):
+        self.key = key
+
+    def normal(self, loc: ArrayLike = ..., scale: ArrayLike = ..., size: ShapeLike = None, dtype: DType = None) -> Array:
+        return mxr.normal(shape=to_shape(size), loc=loc, scale=scale, dtype=dtype, key=self.key)
+
+    def uniform(self, low: ArrayLike = ..., high: ArrayLike = ..., size: ShapeLike = None, dtype: DType = None) -> Array:
+        return mxr.uniform(low, high, shape=to_shape(size), key=self.key)
+
+    def exponential(self, rate: ArrayLike = ..., size: ShapeLike = ...) -> ArrayOrScalar:
+        raise NotImplementedError()
+
+
+# class MLXRandom:
+#
+#     Generator: type[RNG] = None # mxr.Generator
+#
+#     @staticmethod
+#     def default_rng(seed: int = None) -> RNG:
+#         return RNG(seed)
+#
+#     @staticmethod
+#     def normal(loc: ArrayLike = 0.0, scale: ArrayLike = 1.0, shape: ShapeLike = ...) -> Array:
+#         return mxr.normal(shape=to_shape(shape), loc=loc, scale=scale)
+#
+#     @staticmethod
+#     def uniform(low: ArrayLike = ..., high: ArrayLike = ..., shape: ShapeLike = ...) -> Array:
+#         return mxr.uniform(low, high, shape=to_shape(shape))
+#
+#     randint = staticmethod(mxr.randint)
+#
+#     seed = staticmethod(mxr.seed)
+#
+#     @staticmethod
+#     def permutation(size: int, **kwargs) -> Array:
+#         return mx.array(np.random.permutation(size))
+
+
+def is_monotonic_test(vals: Array, op: Any) -> bool:
+    return bool(mx.all(op(vals[:-1], vals[1:])).item())
+
+
+full_slice = slice(None)
+full_slices = tuple(full_slice for _ in range(10))
+
+
+def is_array(obj: Any) -> TypeGuard[Array]:
+    return isinstance(obj, Array)
+
+def is_dtype(obj: Any) -> TypeGuard[DType]:
+    return isinstance(obj, DType)
+
+def is_rng(obj: Any) -> TypeGuard[RNG]:
+    return False
+
+def astype(a: Any, dtype: DType) -> Array:
+    if isinstance(a, Array):
+        return a.astype(dtype)
+    return mx.array(a, dtype=dtype)
+
+from mlx.core import (
+    array,
+    zeros, zeros_like,
+    ones, ones_like,
+    full,
+    eye, trace,
+    arange, concatenate, reshape,
+    abs, square, sqrt, exp, log,
+    sum, max, min, mean, std, var, logsumexp,
+    addmm,
+    isinf, isnan,
+    matmul,
+    minimum, maximum, clip,
+    argmin, argmax,
+    floor, floor_divide,
+    sort, where,
+    eval,
+    expand_dims,
+    save_safetensors,
+    swapaxes, transpose,
+    broadcast_to,
+    inf,
+    all, any,
+    allclose,
+    argsort,
+    stack, array_equal,
+    equal,
+    stream,
+    Stream,
+    load, save,
+)
+
+
+def softmax(a: ArrayLike, axis: Axes = None, keepdims: bool = False, dtype: DType = None) -> Array:
+    if dtype is not None and dtype != a.dtype:
+        a = a.astype(dtype)
+    out = mx.softmax(a, axis=axis)
+    if keepdims:
+        if axis is None:
+            shape = [1] * a.ndim
+        else:
+            shape = list(a.shape)
+            if isinstance(axis, int):
+                shape[axis] = 1
+            elif isinstance(axis, tuple):
+                for ax in axis:
+                    shape[ax] = 1
+        out = out.reshape(*shape)
+    return out
+
+
+from .fast import mlx as fast
+from .linalg import mlx as linalg
+from .random import mlx as random
+from .functional import mlx as functional
+
+
+ten_kind: str = 'mlx'
+
+debug: bool = True
+
+
+def debug_eval(*args: Any) -> None:
+    if debug:
+        eval(*args)
+
+
+def size(a: Array) -> int:
+    return a.size
+
+
+def full_like(a: Array, fill_value: Scalar, dtype: DType = None, *args, **kwargs) -> Array:
+    if dtype is None:
+        dtype = a.dtype
+    return mx.full(a.shape, fill_value, dtype=dtype)
+
+empty = mx.zeros
+empty_like = mx.zeros_like
+
+def fromfunction(function, shape, *, dtype=float, like=None, **kwargs) -> Array:
+    raise NotImplementedError()
+
+
+def broadcast_shapes(a: ArrayLike, b: ArrayLike) -> Shape:
+    return mx.broadcast_to(mx.array(a), b.shape).shape
+
+def median(a: ArrayLike, axis: Axes = ..., dtype: DType = ..., keepdims: bool = ..., **kwargs) -> Array:
+    raise NotImplementedError()
+
+def quantile(a: ArrayLike, axis: Axes = ..., dtype: DType = ..., keepdims: bool = ..., **kwargs) -> Array:
+    raise NotImplementedError()
+
+def percentile(a: ArrayLike, axis: Axes = ..., dtype: DType = ..., keepdims: bool = ..., **kwargs) -> Array:
+    raise NotImplementedError()
+
+def average(a: ArrayLike, axis: Axes = ..., weights: ArrayLike = ..., **kwargs) -> Array:
+    raise NotImplementedError()
+
+
+def searchsorted(a: Array, x: ArrayOrScalar, side: Literal["left", "right"] = ...) -> Array:
+    # TODO: Figure out if there's a better way than roundtripping to numpy
+    return mx.array(np.searchsorted(np.array(a), np.array(x), side=side))
+
+def update(array: Array, where: Array, value: ArrayOrScalar) -> None:
+    s = full_slices[:array.ndim]
+    # s = tuple(slice(None) for _ in range(array.ndim))
+    array[s] = mx.where(where, value, array)
+
+
+def is_increasing(vals: Array, strict: bool = False) -> bool:
+    return is_monotonic_test(vals, mx.less if strict else mx.less_equal)
+
+def is_decreasing(vals: Array, strict: bool = False) -> bool:
+    return is_monotonic_test(vals, mx.greater if strict else mx.greater_equal)
+
+def is_monotonic(vals: Array, strict: bool = False) -> bool:
+    return (is_monotonic_test(vals, mx.less if strict else mx.less_equal) or
+            is_monotonic_test(vals, mx.greater if strict else mx.greater_equal))
+
+
+float64: DType = mx.float32
+float32: DType = mx.float32
+float16: DType = mx.float16
+int64: DType = mx.int64
+int32: DType = mx.int32
+int16: DType = mx.int16
+int8: DType = mx.int8
+uint64: DType = mx.uint64
+uint32: DType = mx.uint32
+uint16: DType = mx.uint16
+uint8: DType = mx.uint8
+bool_: DType = mx.uint8
+
+

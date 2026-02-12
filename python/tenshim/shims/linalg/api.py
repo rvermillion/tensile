@@ -3,6 +3,10 @@
 #  WARNING: CONFIDENTIAL TRADE SECRETS OF FULCRUM ANALYTICS, INC.
 #  UNAUTHORIZED COPYING, DISTRIBUTION, OR DISCLOSURE IS STRICTLY PROHIBITED
 
-from .array import *
+from ..api import Array
 
-from .backends import default as backend
+def cholesky(a: Array, upper: bool = False, **kwargs) -> Array: ...
+
+
+def solve_triangular(a: Array, b: Array, *, upper: bool = False, **kwargs) -> Array: ...
+

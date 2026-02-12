@@ -1,0 +1,16 @@
+#  Copyright (c) 2025. Fulcrum Analytics, Inc. All Rights Reserved.
+#  This file is part of the Fulcrum Impact product and the property of Fulcrum Analytics, Inc.
+#  WARNING: CONFIDENTIAL TRADE SECRETS OF FULCRUM ANALYTICS, INC.
+#  UNAUTHORIZED COPYING, DISTRIBUTION, OR DISCLOSURE IS STRICTLY PROHIBITED
+
+from ..api import Array, ArrayLike, DType, ShapeLike
+
+def normal(loc: ArrayLike = 0.0, scale: ArrayLike = 1.0, shape: ShapeLike = ...) -> Array: ...
+
+def uniform(low: ArrayLike = ..., high: ArrayLike = ..., shape: ShapeLike = ...) -> Array: ...
+
+def randint(low: ArrayLike = ..., high: ArrayLike = ..., shape: ShapeLike = ..., dtype: DType | None = ...) -> Array: ...
+
+def permutation(size: int, **kwargs) -> Array: ...
+
+def seed(seed: int) -> None: ...

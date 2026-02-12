@@ -3,9 +3,4 @@
 #  WARNING: CONFIDENTIAL TRADE SECRETS OF FULCRUM ANALYTICS, INC.
 #  UNAUTHORIZED COPYING, DISTRIBUTION, OR DISCLOSURE IS STRICTLY PROHIBITED
 
-from ..array import Backend
-
-from . import numpy
-
-
-default: Backend = numpy.backend
+from mlx.core.fast import *
