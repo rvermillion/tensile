@@ -25,12 +25,23 @@ AxisChoice: TypeAlias = Union[None, int, Sequence[int]]
 
 Functional: TypeAlias = Callable[[Array], Array]
 
+
+def repr_arg(arg: Any) -> str:
+    return repr(arg)
+
+def repr_item(item: tuple[str, Any]) -> str:
+    return f'{item[0]}={item[1]!r}'
+
+
 class Base:
 
     __slots__ = ()
 
     def _repr_type(self) -> str:
         return self.__class__.__name__
+
+    def _repr_arg(self) -> str:
+        return ', '.join(map(repr_arg, self._repr_args()))
 
     def _repr_args(self) -> Iterable:
         return ()
@@ -44,8 +55,8 @@ class Base:
         return None
 
     def __repr__(self):
-        args = ', '.join(map(repr, self._repr_args()))
-        items = ', '.join(f'{k}={v!r}' for k, v in self._repr_items())
+        args = self._repr_arg()
+        items = ', '.join(map(repr_item, self._repr_items()))
         if args:
             if items:
                 args += ', ' + items

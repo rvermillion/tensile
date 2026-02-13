@@ -37,6 +37,10 @@ class TensorOp(Base):
         self.dtype = dtype
 
     @property
+    def ndim(self) -> int:
+        return len(self.shape)
+
+    @property
     def args(self) -> tuple[TensorType, ...]:
         raise NotImplementedError()
 
@@ -417,6 +421,20 @@ class ExpandDimsOp(AxisUnaryOp):
     def _evaluate(self, a: Array, index: Array = None) -> Array:
         return ten.expand_dims(a, axis=self.axis)
 
+    def map_region(self, arg_index: int, region: Region) -> Region:
+        if isinstance(region, IndexedRegion):
+            indices: list[Optional[RegionIndex]] = [None] * self.ndim
+            for a in self.axis:
+                indices[a] = RegionIndex.range(0, 1)
+            a = 0
+            for ind in region.indices:
+                while indices[a] is not None:
+                    a += 1
+                indices[a] = ind
+                a += 1
+            return IndexedRegion(self.shape, tuple(indices))
+        return Region.from_key(self.shape, ...)
+
     @classmethod
     def _compile_axis(cls, arg: TensorType, *, axis: AxisChoice = None, **kwargs) -> Optional[Axes]:
         axis = (axis, ) if isinstance(axis, int) else tuple(axis) if axis else None
@@ -426,7 +444,7 @@ class ExpandDimsOp(AxisUnaryOp):
             if not all(0 <= a < ndims for a in axis):
                 raise ValueError(f"Axis {axis} out of bounds for shape {arg.shape}")
             return axis
-        return None
+        raise ValueError(f'Cannot expand dims on {arg.shape} with axis {axis}')
 
     @classmethod
     def _compile_shape(cls, arg: TensorType, *, axis: Axes, **kwargs) -> Shape:
@@ -597,6 +615,19 @@ class MatMulOp(BinaryOp):
         if index is None:
             return a @ b
         return a[index] @ b[index]
+
+    def map_region(self, arg_index: int, region: Region) -> Region:
+        if isinstance(region, IndexedRegion):
+            indices = list(region.indices)
+            if arg_index == 0:
+                indices[-1] = RegionIndex.range(0, self.shape[-1])
+            elif arg_index == 1:
+                if self.ndim > 1:
+                    indices[-2] = RegionIndex.range(0, self.shape[-2])
+                else:
+                    indices[-1] = RegionIndex.range(0, self.shape[-1])
+            return IndexedRegion(self.shape, tuple(indices))
+        return Region.from_key(self.shape, ...)
 
     @classmethod
     def _compile(cls, left: TensorType, right: TensorType, **kwargs) -> Self:

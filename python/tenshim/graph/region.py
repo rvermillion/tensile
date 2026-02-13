@@ -59,13 +59,30 @@ class Region(SetLike['Region']):
     __slots__ = ('base',)
 
     base: Shape
-    # indices: tuple[Index, ...]
 
     def __init__(self, base: Shape):
         self.base = base
 
     @property
     def contiguous(self) -> bool:
+        raise NotImplementedError()
+
+    @property
+    def full(self) -> bool:
+        raise NotImplementedError()
+
+    @property
+    def empty(self) -> bool:
+        raise NotImplementedError()
+
+    def select(self, axis: int, index: int) -> 'Region':
+        size = self.base[axis]
+        if index < 0: index += size
+        if 0 <= index < size:
+            return self._select(axis, index)
+        raise IndexError(f'Invalid index {index} for axis {axis} of shape {self.base}')
+
+    def _select(self, axis: int, index: int) -> 'Region':
         raise NotImplementedError()
 
     def overlaps(self, other: 'Region') -> bool:
@@ -77,13 +94,46 @@ class Region(SetLike['Region']):
     def equals(self, other: 'Region') -> bool:
         raise NotImplementedError
 
+    @property
+    def bounds(self) -> 'Region':
+        if self.contiguous:
+            return self
+        return FullRegion(self.base)
+
     def intersect(self, other: 'Region') -> 'Region':
+        if self.base != other.base:
+            raise ValueError(f'Cannot intersect regions with different shapes: {self.base} vs {other.base}')
+        if other.empty or self.full:
+            return other
+        if self.empty or other.full:
+            return self
+        return self._intersect(other)
+
+    def _intersect(self, other: 'Region') -> 'Region':
         return IntersectionRegion.build(self, other)
 
     def union(self, other: 'Region') -> 'Region':
+        if self.base != other.base:
+            raise ValueError(f'Cannot union regions with different shapes: {self.base} vs {other.base}')
+        if other.empty or self.full:
+            return self
+        if self.empty or other.full:
+            return other
+        return self._union(other)
+
+    def _union(self, other: 'Region') -> 'Region':
         return UnionRegion.build(self, other)
 
     def minus(self, other: 'Region') -> 'Region':
+        if self.base != other.base:
+            raise ValueError(f'Cannot minus regions with different shapes: {self.base} vs {other.base}')
+        if other.empty:
+            return self
+        if other.full:
+            return EmptyRegion(self.base)
+        return self._minus(other)
+
+    def _minus(self, other: 'Region') -> 'Region':
         return MinusRegion.build(self, other)
 
     def broadcast(self, shape: Shape) -> 'Region':
@@ -116,24 +166,12 @@ class Region(SetLike['Region']):
     def ndims(self) -> int:
         return len(self.base)
 
+    def map(self, shape: Shape, key: Indices) -> 'Region':
+        return self.from_key(shape, key)
+
     @classmethod
     def from_key(cls, shape: Shape, key: Indices) -> 'Region':
         indices = RegionIndex.from_keys(key, shape)
-        # indices: tuple[RegionIndex, ...]
-        # if key is ...:
-        #     indices = tuple(RangeIndex.build(0, size, 1) for size in shape)
-        # elif isinstance(key, int):
-        #     if key < 0 and shape:
-        #         key = shape[0] + key
-        #     indices = (IntIndex(key),)
-        # elif isinstance(key, slice):
-        #     indices = (key,)
-        # elif isinstance(key, tuple):
-        #     indices = key
-        # else:
-        #     raise ValueError(f'Invalid key: {key} for shape {shape}')
-        # if len(indices) < len(shape):
-        #     indices += tuple(slice(0, size, 1) for size in shape[len(indices):])
         if any(index.empty for index in indices):
             return EmptyRegion(shape)
         return IndexedRegion(shape, indices)
@@ -171,6 +209,10 @@ class RegionIndex(SetLike['RegionIndex']):
     def count(self) -> int:
         raise NotImplementedError()
 
+    @property
+    def bounds(self) -> 'RegionIndex':
+        return self if self.contiguous else ContiguousRangeIndex(self.start, self.stop)
+
     def array(self) -> Array:
         raise NotImplementedError()
 
@@ -178,9 +220,7 @@ class RegionIndex(SetLike['RegionIndex']):
         raise NotImplementedError()
 
     def could_overlap(self, other: 'RegionIndex') -> bool:
-        if self.start < other.start:
-            return other.start < self.stop
-        return self.start < other.stop
+        return self.start < other.stop and other.start < self.stop
 
     def overlaps(self, other: 'RegionIndex') -> bool:
         return self.could_overlap(other) and self.contiguous and other.contiguous
@@ -197,6 +237,12 @@ class RegionIndex(SetLike['RegionIndex']):
     def __len__(self) -> int:
         return self.count
 
+    def display(self, size: int = None) -> str:
+        raise NotImplementedError()
+
+    def _repr_arg(self) -> str:
+        return self.display()
+
     # def __and__(self, other: 'RegionIndex') -> 'RegionIndex':
     #     return self.intersect(other)
     #
@@ -205,6 +251,10 @@ class RegionIndex(SetLike['RegionIndex']):
     #
     # def __sub__(self, other: 'RegionIndex') -> 'RegionIndex':
     #     return self.minus(other)
+
+    @classmethod
+    def range(cls, start: int, stop: int, step: int = None) -> 'RegionIndex':
+        return RangeIndex.build(start, stop, step)
 
     @classmethod
     def from_keys(cls, keys: Indices, shape: Shape) -> tuple['RegionIndex', ...]:
@@ -328,6 +378,10 @@ class IntIndex(RegionIndex):
     def stop(self) -> int:
         return self.last + 1
 
+    @property
+    def bounds(self) -> 'RegionIndex':
+        return self
+
     def array(self) -> Array:
         return ten.array(self.index)
 
@@ -343,8 +397,13 @@ class IntIndex(RegionIndex):
     def overlaps(self, other: RegionIndex) -> bool:
         return other.has(self.index)
 
-    def _repr_args(self) -> Iterable:
-        return self.index,
+    def intersect(self, other: RegionIndex) -> RegionIndex:
+        if other.has(self.index):
+            return self
+        return EmptyIndex.singleton
+
+    def display(self, size: int = None) -> str:
+        return str(self.index)
 
 
 class ArrayIndex(RegionIndex):
@@ -378,8 +437,8 @@ class ArrayIndex(RegionIndex):
     def intersect(self, other: RegionIndex) -> RegionIndex:
         raise NotImplementedError()
 
-    def _repr_args(self) -> Iterable:
-        return self.index,
+    def display(self, size: int = None) -> str:
+        return str(self.index)
 
     @classmethod
     def build(cls, index: Array) -> RegionIndex:
@@ -425,10 +484,21 @@ class RangeIndex(RegionIndex):
                 return IntIndex(start)
             if step == 1:
                 return ContiguousRangeIndex(start, stop)
+            steps = (stop - start - 1) // step
+            stop = start + steps * step + 1
             return StepRangeIndex(start, stop, step)
 
         return EmptyIndex.singleton
         # raise ValueError(f'Invalid range: {start} < {stop}')
+
+    def display(self, size: int = None) -> str:
+        if size is not None and self.stop == size:
+            if self.start == 0:
+                return ':'
+            return f'{self.start}:'
+        if self.start == 0:
+            return f':{self.stop}'
+        return f'{self.start}:{self.stop}'
 
 
 class ContiguousRangeIndex(RangeIndex):
@@ -446,25 +516,49 @@ class ContiguousRangeIndex(RangeIndex):
     def last(self) -> int:
         return self.stop - 1
 
+    @property
+    def bounds(self) -> 'RegionIndex':
+        return self
+
     def has(self, index: int) -> bool:
         return self.start <= index < self.stop
 
     def overlaps(self, other: RegionIndex) -> bool:
+        if self.start < other.stop and other.start < self.stop:
+            if other.contiguous:
+                return True
+        return False
+
+        if self.start >= other.stop:
+            return False
+        if self.stop <= other.start:
+            return False
+        return True
+        # if self.start < other.start:
+        #     return other.start < self.stop
+        # return self.start < other.stop
+
+    def intersect(self, other: RegionIndex) -> RegionIndex:
         if isinstance(other, ContiguousRangeIndex):
-            if self.start < other.start:
-                return other.start < self.stop
-            return self.start < other.stop
+            if self.start >= other.stop:
+                return EmptyIndex.singleton
+            if self.stop <= other.start:
+                return EmptyIndex.singleton
+            start = max(self.start, other.start)
+            stop = min(self.stop, other.stop)
+            return ContiguousRangeIndex(start, stop)
         raise NotImplementedError()
 
     def union(self, other: RegionIndex) -> RegionIndex:
         if isinstance(other, ContiguousRangeIndex):
+            if self.start > other.stop:
+                raise NotImplementedError()
+            if self.stop < other.start:
+                raise NotImplementedError()
             start = min(self.start, other.start)
             stop = max(self.stop, other.stop)
-            return RangeIndex.build(min(self.start, other.start), max(self.stop, other.stop))
+            return ContiguousRangeIndex(start, stop)
         raise NotImplementedError()
-
-    def _repr_args(self) -> Iterable:
-        return f'{self.start}:{self.stop}',
 
 
 class StepRangeIndex(RangeIndex):
@@ -479,13 +573,17 @@ class StepRangeIndex(RangeIndex):
         super().__init__(start, stop)
         self.step = step
 
+    @property
+    def bounds(self) -> 'RegionIndex':
+        return ContiguousRangeIndex(self.start, self.stop)
+
     def has(self, index: int) -> bool:
         if self.start <= index < self.stop:
             return (index - self.start) % self.step == 0
         return False
 
-    def _repr_args(self) -> Iterable:
-        return f'{self.start}:{self.stop}:{self.step}',
+    def display(self, size: int = None) -> str:
+        return super().display(size) + f':{self.step}'
 
 
 class IndexedRegion(Region):
@@ -498,6 +596,15 @@ class IndexedRegion(Region):
         super().__init__(base)
         self.indices = indices
 
+    def _select(self, axis: int, index: int) -> 'Region':
+        ind: RegionIndex = self.indices[axis]
+        if ind.has(index):
+            if isinstance(ind, IntIndex):
+                return self
+            indices = tuple(IntIndex(index) if a == axis else ax for a, ax in enumerate(self.indices))
+            return IndexedRegion(self.base, indices)
+        return EmptyRegion(self.base)
+
     def broadcast(self, shape: Shape) -> Region:
         if shape == self.base:
             return self
@@ -509,23 +616,72 @@ class IndexedRegion(Region):
 
         return IndexedRegion(shape, tuple(indices))
 
+    def _intersect(self, other: 'Region') -> 'Region':
+        if isinstance(other, IndexedRegion):
+            indices = tuple(ind.intersect(other_ind) for ind, other_ind in zip(self.indices, other.indices))
+            if any(ind.empty for ind in indices):
+                return EmptyRegion(self.base)
+            return IndexedRegion(self.base, indices)
+        return super()._intersect(other)
+
     @property
     def contiguous(self) -> bool:
         return all(index.contiguous for index in self.indices)
 
-    def _repr_args(self) -> Iterable:
-        return self.base, *self.indices
+    @property
+    def bounds(self) -> 'Region':
+        if self.contiguous:
+            return self
+        indices = tuple(ind.bounds for ind in self.indices)
+        return IndexedRegion(self.base, indices)
+
+    def _repr_arg(self) -> str:
+        return f'{self.base}, [' + ', '.join(ind.display(size) for ind, size in zip(self.indices, self.base)) + ']'
+
+
+class FullRegion(Region):
+
+    __slots__ = ()
+
+    full: bool = True
+    empty: bool = False
+    contiguous: bool = True
+
+    @property
+    def bounds(self) -> 'Region':
+        return self
+
+    @property
+    def indices(self) -> tuple[RegionIndex, ...]:
+        return tuple(RangeIndex.build(0, size, 1) for size in self.base)
+
+    def _select(self, axis: int, index: int) -> 'Region':
+        if self.base[axis] == 1:
+            return self
+        indices = tuple(IntIndex(index) if a == axis else ax for a, ax in enumerate(self.indices))
+        return IndexedRegion(self.base, indices)
+
+    def broadcast(self, shape: Shape) -> Region:
+        return self if shape == self.base else FullRegion(shape)
 
 
 class EmptyRegion(Region):
 
     __slots__ = ()
 
-    def __init__(self, base: Shape):
-        super().__init__(base)
+    full: bool = False
+    empty: bool = True
+    contiguous: bool = True
+
+    @property
+    def bounds(self) -> 'Region':
+        return self
+
+    def _select(self, axis: int, index: int) -> 'Region':
+        return self
 
     def broadcast(self, shape: Shape) -> Region:
-        return self
+        return self if shape == self.base else EmptyRegion(shape)
 
 
 class MinusRegion(Region):
@@ -581,10 +737,10 @@ class IntersectionRegion(CompositeRegion):
 
     __slots__ = ()
 
-    def intersect(self, other: Region) -> Region:
+    def _intersect(self, other: Region) -> Region:
         return IntersectionRegion(self.regions + (other,))
 
-    def union(self, other: Region) -> Region:
+    def _union(self, other: Region) -> Region:
         return UnionRegion.build(self, other)
 
 
@@ -592,8 +748,8 @@ class UnionRegion(CompositeRegion):
 
     __slots__ = ()
 
-    def intersect(self, other: Region) -> Region:
+    def _intersect(self, other: Region) -> Region:
         return IntersectionRegion.build(self, other)
 
-    def union(self, other: Region) -> Region:
+    def _union(self, other: Region) -> Region:
         return UnionRegion(self.regions + (other,))

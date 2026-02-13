@@ -117,7 +117,7 @@ def data(data: Array, shape: Shape = None, dtype: DType = None, name: str = None
     return DataTensor(data=data, shape=shape, dtype=dtype, name=name)
 
 
-def arange(start: ten.Scalar, stop: ten.Scalar = None, step: ten.Scalar = None, dtype: DType = None) -> 'Tensor':
+def arange(start: ten.Scalar, stop: ten.Scalar = None, step: ten.Scalar = None, dtype: DType = None, name: str = None) -> 'Tensor':
     if step is None:
         if stop is None:
             stop = start
@@ -126,7 +126,7 @@ def arange(start: ten.Scalar, stop: ten.Scalar = None, step: ten.Scalar = None, 
     elif stop is None:
         stop = start
         start = 0
-    return data(ten.arange(start, stop, step, dtype=dtype))
+    return data(ten.arange(start, stop, step, dtype=dtype), name=name)
 
 
 def array(a: Union[list[ten.Scalar], ten.Scalar], dtype: DType = None, name: str = None) -> 'Tensor':
@@ -322,9 +322,9 @@ class DerivedTensor(Tensor):
             return cache[index]
 
     def handle(self, event: TensorEvent, arg_index: int = -1) -> None:
-        self.debug(f'Tensor {self.name}: Handling {event} for argument {arg_index} of {self}')
-        # For now, we recalculate the entire tensor every time.
         self.data = None
+        self.debug(f'Tensor {self.name}: Handling {event.region} for argument {arg_index} of {self}')
+        # For now, we recalculate the entire tensor every time.
         region = self.op.map_region(arg_index, event.region)
         update = TensorEvent.create(self, region)
         # update = self.op.update(self, event, arg_index)
@@ -352,6 +352,7 @@ def test():
     f = d * e
     f.name = 'f'
     g = matmul(a, b, name='g')
+    at = transpose(a, name='at')
 
     h = expand_dims(a, axis=(-5, -3, -1), name='h')
     i = flatten(h, start_index=1, end_index=3, name='i')
@@ -362,7 +363,13 @@ def test():
     # k = moveaxis(g, 1, 2, name='k')
     l = add(k, e, name='l')
 
-    t = (a, b, c, d, e, f, g, h, i, j, k, l)
+    m = data(ten.arange(0., 9.).reshape(3, 3), name='m')
+    n = data(ten.arange(0., -9., -1.).reshape(3, 3), name='n')
+    o = matmul(m, n, name='o')
+    p = expand_dims(o, axis=(0, -1), name='p')
+    q = add(p, e, name='q')
+
+    t = (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q)
     for x in t:
         print(x)
     print('-' * 80)
@@ -374,6 +381,7 @@ def test():
 
     print('-' * 80)
     b[1] = 100
+    m[1, 1] = 1000
     print('-' * 80)
     for x in t:
         print(x.name, '=', x.shape, '=', x.get())
