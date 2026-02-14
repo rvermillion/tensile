@@ -11,12 +11,6 @@ from .common import Array, Base, DType, Index, Indices, Shape, TensorType
 full = slice(None, None, None)
 
 
-def repr_index(index: Index) -> str:
-    if isinstance(index, slice):
-        start, stop, step = index.indices(10)
-    return str(index) if index is not None else '...'
-
-
 T = TypeVar('T', bound='SetLike')
 
 
@@ -75,6 +69,10 @@ class Region(SetLike['Region']):
     def empty(self) -> bool:
         raise NotImplementedError()
 
+    def validate(self) -> None:
+        if not self.base:
+            raise ValueError('Cannot create region with empty shape')
+
     def select(self, axis: int, index: int) -> 'Region':
         size = self.base[axis]
         if index < 0: index += size
@@ -86,19 +84,23 @@ class Region(SetLike['Region']):
         raise NotImplementedError()
 
     def overlaps(self, other: 'Region') -> bool:
-        raise NotImplementedError
+        raise NotImplementedError()
 
     def contains(self, other: 'Region') -> bool:
-        raise NotImplementedError
+        raise NotImplementedError()
 
     def equals(self, other: 'Region') -> bool:
-        raise NotImplementedError
+        raise NotImplementedError()
 
     @property
     def bounds(self) -> 'Region':
         if self.contiguous:
             return self
-        return FullRegion(self.base)
+        indices = tuple(ContiguousRangeIndex.build(*self.bound(a)) for a in range(self.ndims))
+        return IndexedRegion(self.base, indices)
+
+    def bound(self, axis: int) -> tuple[int, int]:
+        raise NotImplementedError()
 
     def intersect(self, other: 'Region') -> 'Region':
         if self.base != other.base:
@@ -205,6 +207,9 @@ class RegionIndex(SetLike['RegionIndex']):
     def empty(self) -> bool:
         return self.count == 0
 
+    def full(self, size: int) -> bool:
+        return self.contiguous and self.start == 0 and self.stop == size
+
     @property
     def count(self) -> int:
         raise NotImplementedError()
@@ -225,17 +230,38 @@ class RegionIndex(SetLike['RegionIndex']):
     def overlaps(self, other: 'RegionIndex') -> bool:
         return self.could_overlap(other) and self.contiguous and other.contiguous
 
-    # def intersect(self, other: 'RegionIndex') -> 'RegionIndex':
-    #     raise NotImplementedError()
-    #
-    # def union(self, other: 'RegionIndex') -> 'RegionIndex':
-    #     raise NotImplementedError()
-    #
-    # def minus(self, other: 'RegionIndex') -> 'RegionIndex':
-    #     raise NotImplementedError()
+    def contains(self, other: 'RegionIndex') -> bool:
+        return self.contiguous and self.start <= other.start and other.stop <= self.stop
+
+    def intersect(self, other: 'RegionIndex') -> 'RegionIndex':
+        if self.contiguous and self.start <= other.start and self.stop >= other.stop:
+            return other
+        if other.contiguous and other.start <= self.start and other.stop >= self.stop:
+            return self
+        raise NotImplementedError()
+
+    def union(self, other: 'RegionIndex') -> 'RegionIndex':
+        if other.contiguous and other.start <= self.start and other.stop >= self.stop:
+            return other
+        if self.contiguous and self.start <= other.start and self.stop >= other.stop:
+            return self
+        raise NotImplementedError()
+
+    def minus(self, other: 'RegionIndex') -> 'RegionIndex':
+        if other.start >= self.stop or other.stop <= self.start:
+            return self
+        raise NotImplementedError()
 
     def __len__(self) -> int:
         return self.count
+
+    def validate(self, size: int) -> None:
+        if self.start < 0:
+            raise ValueError(f'Negative start: {self.start}')
+        if self.stop <= self.start:
+            raise ValueError(f'Invalid range: {self.start} <= {self.stop}')
+        if self.stop > size:
+            raise ValueError(f'Index out of bounds: {self.stop} > {size}')
 
     def display(self, size: int = None) -> str:
         raise NotImplementedError()
@@ -255,6 +281,10 @@ class RegionIndex(SetLike['RegionIndex']):
     @classmethod
     def range(cls, start: int, stop: int, step: int = None) -> 'RegionIndex':
         return RangeIndex.build(start, stop, step)
+
+    @classmethod
+    def single(cls, index: int) -> 'RegionIndex':
+        return IntIndex(index)
 
     @classmethod
     def from_keys(cls, keys: Indices, shape: Shape) -> tuple['RegionIndex', ...]:
@@ -330,6 +360,9 @@ class EmptyIndex(RegionIndex):
     contiguous: bool = True
     empty: bool = True
 
+    def validate(self, size: int) -> None:
+        pass
+
     def has(self, index: int) -> bool:
         return False
 
@@ -382,6 +415,15 @@ class IntIndex(RegionIndex):
     def bounds(self) -> 'RegionIndex':
         return self
 
+    def full(self, size: int) -> bool:
+        return size == 1 and self.index == 0
+
+    def validate(self, size: int) -> None:
+        if self.index < 0:
+            raise ValueError(f'Negative index: {self.index}')
+        if self.index >= size:
+            raise ValueError(f'Index out of bounds: {self.index} >= {size}')
+
     def array(self) -> Array:
         return ten.array(self.index)
 
@@ -428,6 +470,19 @@ class ArrayIndex(RegionIndex):
     def stop(self) -> int:
         return self.last + 1
 
+    def validate(self, size: int) -> None:
+        super().validate(size)
+        if not ten.is_integer(self.index.dtype):
+            raise ValueError(f'Index must be integer, got {self.index.dtype}')
+        if self.index.ndim != 1:
+            raise ValueError(f'Index must be 1D, got {self.index.ndim}D')
+        if ten.any(self.index < 0).item():
+            raise ValueError(f'Negative index: {self.index}')
+        if ten.any(self.index[:-1] > self.index[1:]).item():
+            raise ValueError(f'Index not sorted: {self.index}')
+        if ten.any(self.index >= size).item():
+            raise ValueError(f'Index out of bounds: {self.index} >= {size}')
+
     def array(self) -> Array:
         return self.index
 
@@ -442,13 +497,22 @@ class ArrayIndex(RegionIndex):
 
     @classmethod
     def build(cls, index: Array) -> RegionIndex:
-        if index.dtype != ten.int64:
-            raise ValueError(f'Index must be int64, got {index.dtype}')
+        if not ten.is_integer(index.dtype):
+            raise ValueError(f'Index must be integer, got {index.dtype}')
         if index.size == 0:
             return EmptyIndex.singleton
         if index.ndim != 1:
             index = ten.reshape(index, (-1,))
+        start = index[0].item()
+        if index.size == 1:
+            return IntIndex(start)
         index = ten.sort(index)
+        last = index[-1].item()
+        if start == last:
+            return IntIndex(start)
+        stop = last + 1
+        if index.size >= stop - start:
+            return ContiguousRangeIndex(start, stop)
         return cls(index)
 
 
@@ -529,15 +593,6 @@ class ContiguousRangeIndex(RangeIndex):
                 return True
         return False
 
-        if self.start >= other.stop:
-            return False
-        if self.stop <= other.start:
-            return False
-        return True
-        # if self.start < other.start:
-        #     return other.start < self.stop
-        # return self.start < other.stop
-
     def intersect(self, other: RegionIndex) -> RegionIndex:
         if isinstance(other, ContiguousRangeIndex):
             if self.start >= other.stop:
@@ -577,6 +632,11 @@ class StepRangeIndex(RangeIndex):
     def bounds(self) -> 'RegionIndex':
         return ContiguousRangeIndex(self.start, self.stop)
 
+    def validate(self, size: int) -> None:
+        super().validate(size)
+        if self.step == 1:
+            raise ValueError(f'Step cannot be 1: {self.start} < {self.stop} by {self.step}')
+
     def has(self, index: int) -> bool:
         if self.start <= index < self.stop:
             return (index - self.start) % self.step == 0
@@ -604,6 +664,26 @@ class IndexedRegion(Region):
             indices = tuple(IntIndex(index) if a == axis else ax for a, ax in enumerate(self.indices))
             return IndexedRegion(self.base, indices)
         return EmptyRegion(self.base)
+
+    @property
+    def full(self) -> bool:
+        for ind, size in zip(self.indices, self.base):
+            if not ind.full(size):
+                return False
+        return True
+
+    @property
+    def empty(self) -> bool:
+        return any(ind.empty for ind in self.indices)
+
+    def validate(self) -> None:
+        super().validate()
+        if len(self.indices) != len(self.base):
+            raise ValueError(f'Invalid region shape: {self.base} with indices {self.indices}')
+        if any(ind.empty for ind in self.indices):
+            raise ValueError('Empty indices')
+        for ind, size in zip(self.indices, self.base):
+            ind.validate(size)
 
     def broadcast(self, shape: Shape) -> Region:
         if shape == self.base:
@@ -635,6 +715,10 @@ class IndexedRegion(Region):
         indices = tuple(ind.bounds for ind in self.indices)
         return IndexedRegion(self.base, indices)
 
+    def bound(self, axis: int) -> tuple[int, int]:
+        index_bounds = self.indices[axis].bounds
+        return index_bounds.start, index_bounds.stop
+
     def _repr_arg(self) -> str:
         return f'{self.base}, [' + ', '.join(ind.display(size) for ind, size in zip(self.indices, self.base)) + ']'
 
@@ -650,6 +734,9 @@ class FullRegion(Region):
     @property
     def bounds(self) -> 'Region':
         return self
+
+    def bound(self, axis: int) -> tuple[int, int]:
+        return 0, self.base[axis]
 
     @property
     def indices(self) -> tuple[RegionIndex, ...]:
@@ -676,6 +763,9 @@ class EmptyRegion(Region):
     @property
     def bounds(self) -> 'Region':
         return self
+
+    def bound(self, axis: int) -> tuple[int, int]:
+        return 0, 0
 
     def _select(self, axis: int, index: int) -> 'Region':
         return self

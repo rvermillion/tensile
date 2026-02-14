@@ -3,11 +3,11 @@
 #  WARNING: CONFIDENTIAL TRADE SECRETS OF FULCRUM ANALYTICS, INC.
 #  UNAUTHORIZED COPYING, DISTRIBUTION, OR DISCLOSURE IS STRICTLY PROHIBITED
 
-from typing import Any, Optional, Sequence, TypeAlias, Union
+from typing import Any, Optional, TypeAlias, Union
 from .. import ten
 
-from .common import Array, Axes, Base, DType, Functional, Indices, Shape
-from .op import TensorOp, TensorOps, AxisChoice, broadcast_shapes
+from .common import Array, Axes, AxisChoice, Base, DType, Functional, Indices, Shape
+from .op import TensorOp, TensorOps
 from .region import Region
 
 
@@ -113,8 +113,8 @@ def matmul(a: 'Tensor', b: 'Tensor', name: str = None) -> 'Tensor':
     return DerivedTensor(op=TensorOps.matmul(a, b), name=name)
 
 
-def data(data: Array, shape: Shape = None, dtype: DType = None, name: str = None) -> 'Tensor':
-    return DataTensor(data=data, shape=shape, dtype=dtype, name=name)
+def from_array(a: Array, shape: Shape = None, dtype: DType = None, name: str = None) -> 'Tensor':
+    return DataTensor(data=a, shape=shape, dtype=dtype, name=name)
 
 
 def arange(start: ten.Scalar, stop: ten.Scalar = None, step: ten.Scalar = None, dtype: DType = None, name: str = None) -> 'Tensor':
@@ -126,15 +126,15 @@ def arange(start: ten.Scalar, stop: ten.Scalar = None, step: ten.Scalar = None, 
     elif stop is None:
         stop = start
         start = 0
-    return data(ten.arange(start, stop, step, dtype=dtype), name=name)
+    return from_array(ten.arange(start, stop, step, dtype=dtype), name=name)
 
 
 def array(a: Union[list[ten.Scalar], ten.Scalar], dtype: DType = None, name: str = None) -> 'Tensor':
-    return data(ten.array(a, dtype=dtype), dtype=dtype, name=name)
+    return from_array(ten.array(a, dtype=dtype), dtype=dtype, name=name)
 
 
 def constant(value: ten.Scalar, dtype: DType = None, name: str = None) -> 'Tensor':
-    return data(ten.array(value, dtype=dtype), dtype=dtype, name=name)
+    return from_array(ten.array(value, dtype=dtype), dtype=dtype, name=name)
 
 
 # noinspection PyShadowingBuiltins
@@ -199,7 +199,8 @@ class Tensor:
     def get(self, index: Array = None) -> Array:
         raise NotImplementedError()
 
-    def debug(self, *args, **kwargs) -> None:
+    @staticmethod
+    def debug(*args, **kwargs) -> None:
         print(*args, **kwargs)
 
     def handle(self, event: TensorEvent, arg_index: int = -1) -> None:
@@ -293,9 +294,10 @@ class DataTensor(Tensor):
 
 class DerivedTensor(Tensor):
 
-    __slots__ = ('op', )
+    __slots__ = ('op', 'prev')
 
     op: TensorOp
+    prev: Optional[Array]
 
     def __init__(self, op: TensorOp, shape: Shape = None, dtype: DType = None, name: str = None):
         if op is None:
@@ -306,22 +308,24 @@ class DerivedTensor(Tensor):
             dtype = op.dtype
         super().__init__(shape=shape, dtype=dtype, name=name)
         self.op = op
+        self.prev = None
         if op is not None:
             for a, arg in enumerate(op.args):
                 arg.add_dependent(self, a)
 
-    def get(self, index: Array = None) -> Array:
+    def get(self, region: Region = None) -> Array:
         cache = self.data
-        if index is None:
+        if region is None:
             if cache is None:
                 cache = self.data = self.op.evaluate()
-            return cache if index is None else cache[index]
+            return cache # if index is None else cache[index]
         else:
             if cache is None:
-                cache = self.data = self.op.evaluate(index=index)
-            return cache[index]
+                cache = self.data = self.op.evaluate()
+            return cache   #[index]
 
     def handle(self, event: TensorEvent, arg_index: int = -1) -> None:
+        self.prev = self.data
         self.data = None
         self.debug(f'Tensor {self.name}: Handling {event.region} for argument {arg_index} of {self}')
         # For now, we recalculate the entire tensor every time.
@@ -352,7 +356,7 @@ def test():
     f = d * e
     f.name = 'f'
     g = matmul(a, b, name='g')
-    at = transpose(a, name='at')
+    # at = transpose(a, name='at')
 
     h = expand_dims(a, axis=(-5, -3, -1), name='h')
     i = flatten(h, start_index=1, end_index=3, name='i')
@@ -363,8 +367,8 @@ def test():
     # k = moveaxis(g, 1, 2, name='k')
     l = add(k, e, name='l')
 
-    m = data(ten.arange(0., 9.).reshape(3, 3), name='m')
-    n = data(ten.arange(0., -9., -1.).reshape(3, 3), name='n')
+    m = from_array(ten.arange(0., 9.).reshape(3, 3), name='m')
+    n = from_array(ten.arange(0., -9., -1.).reshape(3, 3), name='n')
     o = matmul(m, n, name='o')
     p = expand_dims(o, axis=(0, -1), name='p')
     q = add(p, e, name='q')

@@ -3,9 +3,9 @@
 #  WARNING: CONFIDENTIAL TRADE SECRETS OF FULCRUM ANALYTICS, INC.
 #  UNAUTHORIZED COPYING, DISTRIBUTION, OR DISCLOSURE IS STRICTLY PROHIBITED
 
-from typing import Any, Callable, Optional, Self, Sequence, TypeAlias, Union, TYPE_CHECKING
+from typing import Any, Optional, Self, Sequence
 from .. import ten
-from .common import Array, AxisChoice, Axes, Base, DType, Functional, Index, Indices, Shape, TensorType
+from .common import Array, AxisChoice, Axes, Base, DType, Functional, Indices, Shape, TensorType
 from .util import broadcast_shapes, promote_types
 from .region import IndexedRegion, Region, RegionIndex
 
@@ -58,7 +58,7 @@ class TensorOp(Base):
     def _options(self, opts: dict[str, Any]) -> None:
         pass
 
-    def evaluate(self, index: Array = None) -> Array:
+    def evaluate(self, region: Region = None) -> Array:
         raise NotImplementedError()
 
     def map_region(self, arg_index: int, region: Region) -> Region:
@@ -82,12 +82,12 @@ class TensorOp(Base):
     # def update(self, tensor: 'EventTensor', event: TensorEvent, arg_index: int) -> TensorEvent:
     #     raise NotImplementedError()
 
-    def print_evaluating(self, *args: Array, index: Array = None) -> None:
+    def print_evaluating(self, *args: Array, region: Region = None) -> None:
         disp = ', '.join(str(arg) for arg in args)
-        if index is None:
+        if region is None:
             print(f'Evaluating {self} with ({disp})')
         else:
-            print(f'Evaluating {self} with ({disp}) for index {index}')
+            print(f'Evaluating {self} with ({disp}) for region {region}')
 
     def __repr__(self):
         if opts := self.options():
@@ -117,12 +117,12 @@ class UnaryOp(TensorOp):
     def args(self) -> tuple[TensorType, ...]:
         return self.arg,
 
-    def evaluate(self, index: Array = None) -> Array:
+    def evaluate(self, region: Region = None) -> Array:
         a = self.arg.get()
-        self.print_evaluating(a, index=index)
-        return self._evaluate(a, index=index)
+        self.print_evaluating(a, region=region)
+        return self._evaluate(a, region=region)
 
-    def _evaluate(self, a: Array, index: Array = None) -> Array:
+    def _evaluate(self, a: Array, region: Region = None) -> Array:
         raise NotImplementedError()
 
 
@@ -139,7 +139,7 @@ class BroadcastOp(UnaryOp):
     def _options(self, opts: dict[str, Any]) -> None:
         opts['shape'] = self.shape
 
-    def _evaluate(self, a: Array, index: Array = None) -> Array:
+    def _evaluate(self, a: Array, region: Region = None) -> Array:
         return ten.broadcast_to(a, self.shape)
 
     def map_region(self, arg_index: int, region: Region) -> Region:
@@ -166,7 +166,7 @@ class ReshapeOp(UnaryOp):
     def _options(self, opts: dict[str, Any]) -> None:
         opts['shape'] = self.shape
 
-    def _evaluate(self, a: Array, index: Array = None) -> Array:
+    def _evaluate(self, a: Array, region: Region = None) -> Array:
         return ten.reshape(a, self.shape)
 
     @classmethod
@@ -207,7 +207,7 @@ class SubscriptOp(UnaryOp):
     def _options(self, opts: dict[str, Any]) -> None:
         opts['indices'] = self.indices
 
-    def _evaluate(self, a: Array, index: Array = None) -> Array:
+    def _evaluate(self, a: Array, region: Region = None) -> Array:
         return a[self.indices]
 
     @classmethod
@@ -231,7 +231,7 @@ class TransposeOp(UnaryOp):
     def _options(self, opts: dict[str, Any]) -> None:
         opts['axes'] = self.axes
 
-    def _evaluate(self, a: Array, index: Array = None) -> Array:
+    def _evaluate(self, a: Array, region: Region = None) -> Array:
         return ten.transpose(a, axes=self.axes)
 
     def map_region(self, arg_index: int, region: Region) -> Region:
@@ -269,7 +269,18 @@ class ElementWiseUnaryOp(UnaryOp):
         return arg.dtype
 
 
-class FunctionalOp(ElementWiseUnaryOp):
+class FunctionOp(ElementWiseUnaryOp):
+
+    __slots__ = ()
+
+    func: Functional
+
+    def _evaluate(self, a: Array, region: Region = None) -> Array:
+        # return self.func(a if index is None else a[index])
+        return self.func(a)
+
+
+class FunctionalOp(FunctionOp):
 
     __slots__ = ('func', )
 
@@ -280,9 +291,6 @@ class FunctionalOp(ElementWiseUnaryOp):
         super().__init__(arg, shape, dtype)
         self.func = func
 
-    def _evaluate(self, a: Array, index: Array = None) -> Array:
-        return self.func(a if index is None else a[index])
-
     @classmethod
     def _compile(cls, arg: TensorType, func: Functional = None, **kwargs) -> Self:
         if func is None:
@@ -291,65 +299,52 @@ class FunctionalOp(ElementWiseUnaryOp):
 
 
 
-class ExpOp(ElementWiseUnaryOp):
+class ExpOp(FunctionOp):
 
     __slots__ = ()
 
     name = 'exp'
-
-    def _evaluate(self, a: Array, index: Array = None) -> Array:
-        return ten.exp(a if index is None else a[index])
+    func = ten.exp
 
 
-class ExpM1Op(ElementWiseUnaryOp):
+class ExpM1Op(FunctionOp):
 
     __slots__ = ()
 
     name = 'expm1'
-
-    def _evaluate(self, a: Array, index: Array = None) -> Array:
-        return ten.expm1(a if index is None else a[index])
+    func = ten.expm1
 
 
-class LogOp(ElementWiseUnaryOp):
+class LogOp(FunctionOp):
 
     __slots__ = ()
 
     name = 'log'
-
-    def _evaluate(self, a: Array, index: Array = None) -> Array:
-        return ten.log(a if index is None else a[index])
+    func = ten.log
 
 
-class SqrtOp(ElementWiseUnaryOp):
+class SqrtOp(FunctionOp):
 
     __slots__ = ()
 
     name = 'sqrt'
-
-    def _evaluate(self, a: Array, index: Array = None) -> Array:
-        return ten.sqrt(a if index is None else a[index])
+    func = ten.sqrt
 
 
-class SquareOp(ElementWiseUnaryOp):
+class SquareOp(FunctionOp):
 
     __slots__ = ()
 
     name = 'square'
-
-    def _evaluate(self, a: Array, index: Array = None) -> Array:
-        return ten.square(a if index is None else a[index])
+    func = ten.square
 
 
-class FloorOp(ElementWiseUnaryOp):
+class FloorOp(FunctionOp):
 
     __slots__ = ()
 
     name = 'floor'
-
-    def _evaluate(self, a: Array, index: Array = None) -> Array:
-        return ten.floor(a if index is None else a[index])
-
+    func = ten.floor
 
 
 
@@ -418,14 +413,14 @@ class ExpandDimsOp(AxisUnaryOp):
 
     name = 'expand_dims'
 
-    def _evaluate(self, a: Array, index: Array = None) -> Array:
+    def _evaluate(self, a: Array, region: Region = None) -> Array:
         return ten.expand_dims(a, axis=self.axis)
 
     def map_region(self, arg_index: int, region: Region) -> Region:
         if isinstance(region, IndexedRegion):
             indices: list[Optional[RegionIndex]] = [None] * self.ndim
             for a in self.axis:
-                indices[a] = RegionIndex.range(0, 1)
+                indices[a] = RegionIndex.single(0)
             a = 0
             for ind in region.indices:
                 while indices[a] is not None:
@@ -509,7 +504,7 @@ class MinOp(ReduceOp):
 
     name = 'min'
 
-    def _evaluate(self, a: Array, index: Array = None) -> Array:
+    def _evaluate(self, a: Array, region: Region = None) -> Array:
         return ten.min(a, axis=self.axis, keepdims=self.keepdims)
 
 
@@ -519,7 +514,7 @@ class MaxOp(ReduceOp):
 
     name = 'max'
 
-    def _evaluate(self, a: Array, index: Array = None) -> Array:
+    def _evaluate(self, a: Array, region: Region = None) -> Array:
         return ten.max(a, axis=self.axis, keepdims=self.keepdims)
 
 
@@ -529,7 +524,7 @@ class MeanOp(ReduceOp):
 
     name = 'mean'
 
-    def _evaluate(self, a: Array, index: Array = None) -> Array:
+    def _evaluate(self, a: Array, region: Region = None) -> Array:
         return ten.mean(a, axis=self.axis, keepdims=self.keepdims)
 
 
@@ -539,7 +534,7 @@ class SoftMaxOp(ReduceOp):
 
     name = 'softmax'
 
-    def _evaluate(self, a: Array, index: Array = None) -> Array:
+    def _evaluate(self, a: Array, region: Region = None) -> Array:
         return ten.softmax(a, axis=self.axis, keepdims=self.keepdims)
 
 
@@ -549,7 +544,7 @@ class SumOp(ReduceOp):
 
     name = 'sum'
 
-    def _evaluate(self, a: Array, index: Array = None) -> Array:
+    def _evaluate(self, a: Array, region: Region = None) -> Array:
         return ten.sum(a, axis=self.axis, keepdims=self.keepdims)
 
     # def update(self, tensor: 'EventTensor', event: TensorEvent, arg_index: int) -> Optional[TensorEvent]:
@@ -569,7 +564,7 @@ class LogSumExpOp(ReduceOp):
 
     name = 'logsumexp'
 
-    def _evaluate(self, a: Array, index: Array = None) -> Array:
+    def _evaluate(self, a: Array, region: Region = None) -> Array:
         return ten.logsumexp(a, axis=self.axis, keepdims=self.keepdims)
 
 
@@ -591,13 +586,13 @@ class BinaryOp(TensorOp):
     def args(self) -> tuple[TensorType, ...]:
         return self.left, self.right
 
-    def evaluate(self, index: Array = None) -> Array:
+    def evaluate(self, region: Region = None) -> Array:
         left = self.left.get()
         right = self.right.get()
-        self.print_evaluating(left, right, index=index)
-        return self._evaluate(left, right, index=index)
+        self.print_evaluating(left, right, region=region)
+        return self._evaluate(left, right, region=region)
 
-    def _evaluate(self, a: Array, b: Array, index: Array = None) -> Array:
+    def _evaluate(self, a: Array, b: Array, region: Region = None) -> Array:
         raise NotImplementedError()
 
     # def update(self, tensor: 'EventTensor', event: TensorEvent, arg_index: int) -> Optional[TensorEvent]:
@@ -611,10 +606,10 @@ class MatMulOp(BinaryOp):
 
     name = 'matmul'
 
-    def _evaluate(self, a: Array, b: Array, index: Array = None) -> Array:
-        if index is None:
-            return a @ b
-        return a[index] @ b[index]
+    def _evaluate(self, a: Array, b: Array, region: Region = None) -> Array:
+        # if index is None:
+        return a @ b
+        # return a[index] @ b[index]
 
     def map_region(self, arg_index: int, region: Region) -> Region:
         if isinstance(region, IndexedRegion):
@@ -692,10 +687,10 @@ class GreaterOp(CompareOp):
 
     name = 'greater'
 
-    def _evaluate(self, a: Array, b: Array, index: Array = None) -> Array:
-        if index is None:
-            return a > b
-        return a[index] > b[index]
+    def _evaluate(self, a: Array, b: Array, region: Region = None) -> Array:
+        # if index is None:
+        return a > b
+        # return a[index] > b[index]
 
 
 class GreaterEqualOp(CompareOp):
@@ -704,10 +699,10 @@ class GreaterEqualOp(CompareOp):
 
     name = 'greater_equal'
 
-    def _evaluate(self, a: Array, b: Array, index: Array = None) -> Array:
-        if index is None:
-            return a >= b
-        return a[index] >= b[index]
+    def _evaluate(self, a: Array, b: Array, region: Region = None) -> Array:
+        # if index is None:
+        return a >= b
+        # return a[index] >= b[index]
 
 
 class AddOp(ElementWiseBinaryOp):
@@ -716,10 +711,10 @@ class AddOp(ElementWiseBinaryOp):
 
     name = 'add'
 
-    def _evaluate(self, a: Array, b: Array, index: Array = None) -> Array:
-        if index is None:
-            return a + b
-        return a[index] + b[index]
+    def _evaluate(self, a: Array, b: Array, region: Region = None) -> Array:
+        # if index is None:
+        return a + b
+        # return a[index] + b[index]
 
     # def update(self, tensor: 'EventTensor', event: TensorEvent, arg_index: int) -> Optional[TensorEvent]:
     #     print(f'Updating {tensor} with {self} from event {event} for arg {arg_index}')
@@ -745,10 +740,10 @@ class SubOp(ElementWiseBinaryOp):
 
     name = 'sub'
 
-    def _evaluate(self, a: Array, b: Array, index: Array = None) -> Array:
-        if index is None:
-            return a - b
-        return a[index] - b[index]
+    def _evaluate(self, a: Array, b: Array, region: Region = None) -> Array:
+        # if index is None:
+        return a - b
+        # return a[index] - b[index]
 
 
 class MulOp(ElementWiseBinaryOp):
@@ -757,10 +752,10 @@ class MulOp(ElementWiseBinaryOp):
 
     name = 'mul'
 
-    def _evaluate(self, a: Array, b: Array, index: Array = None) -> Array:
-        if index is None:
-            return a * b
-        return a[index] * b[index]
+    def _evaluate(self, a: Array, b: Array, region: Region = None) -> Array:
+        # if index is None:
+        return a * b
+        # return a[index] * b[index]
 
     # def update(self, tensor: 'EventTensor', event: TensorEvent, arg_index: int) -> Optional[TensorEvent]:
     #     print(f'Updating {tensor} with {self} from event {event} for arg {arg_index}')
