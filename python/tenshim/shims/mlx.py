@@ -99,8 +99,9 @@ from mlx.core import (
     full,
     eye, trace,
     arange, concatenate, reshape,
-    abs, square, sqrt, exp, log,
-    sum, max, min, mean, std, var, logsumexp,
+    abs, square, sqrt, exp, log, expm1,
+    sum, max, min, mean, std, var, logsumexp, prod,
+    cumsum, cumprod, cummax, cummin,
     addmm,
     isinf, isnan,
     matmul,
@@ -109,7 +110,7 @@ from mlx.core import (
     floor, floor_divide,
     sort, where,
     eval,
-    expand_dims,
+    expand_dims, squeeze,
     save_safetensors,
     swapaxes, transpose,
     broadcast_to,
@@ -210,6 +211,56 @@ def is_decreasing(vals: Array, strict: bool = False) -> bool:
 def is_monotonic(vals: Array, strict: bool = False) -> bool:
     return (is_monotonic_test(vals, mx.less if strict else mx.less_equal) or
             is_monotonic_test(vals, mx.greater if strict else mx.greater_equal))
+
+def is_integer(dtype: DType) -> bool:
+    return mx.issubdtype(dtype, mx.integer)
+
+
+def is_floating(dtype: DType) -> bool:
+    return mx.issubdtype(dtype, mx.floating)
+
+
+# noinspection PyShadowingNames
+def select(a: Array, where: Array) -> Array:
+    if where is None:
+        raise ValueError('where must be specified')
+    if where.dtype != mx.bool_:
+        raise ValueError('where must be a boolean array')
+    a_flat = a.reshape(-1)
+    w = mx.broadcast_to(where, a.shape).reshape(-1)
+    idx = mx.cumsum(w.astype(mx.int32))
+    count = idx[-1].item()
+    print(f'selecting {count} out of {where.size}')
+    idx = mx.where(where, idx-1, -1)
+    print(f'idx: {idx}')
+    selected = mx.zeros(count+1, dtype=a.dtype)
+    selected[idx] = a_flat
+    return selected[:count]
+
+
+# noinspection PyShadowingNames
+def pack_front_sort(a: Array, where: Array, *, fill_value=0, index_dtype: DType = None) -> tuple[Array, Array]:
+    if index_dtype is None:
+        index_dtype = mx.int32
+    elif not mx.issubdtype(index_dtype, mx.integer):
+        raise ValueError(f'index_dtype must be an integer type, got {index_dtype}')
+    a_flat = a.reshape(-1)
+    w = mx.broadcast_to(where, a.shape).reshape(-1).astype(index_dtype)
+    n = a_flat.size
+    idx = mx.arange(n, 2*n, dtype=index_dtype)
+    # Build a single sortable key: key = (w_false * big) + idx0
+    # where w_false=1 for false, 0 for true.
+    key = idx - w * n # trues in [0..n-1], falses in [n..2n-1]
+    perm = mx.argsort(key)    # should be stable given unique key
+    a_sorted = a_flat[perm]
+    # w_sorted = w[perm]
+    # Count still on-device
+    count = mx.sum(w).reshape(1)
+    # Create padded output: take a_sorted but replace the tail with fill_value
+    out = mx.full((n,), fill_value, dtype=a_flat.dtype)
+    mask = mx.arange(n, dtype=index_dtype) < count
+    out = mx.where(mask, a_sorted, out)  # broadcast count
+    return out, count
 
 
 float64: DType = mx.float32

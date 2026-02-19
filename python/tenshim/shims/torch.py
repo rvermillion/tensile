@@ -95,7 +95,7 @@ from torch import (
     tensor as array,
     zeros, zeros_like, ones, ones_like, full, full_like, empty, empty_like,
     arange, concatenate, reshape,
-    abs, square, sqrt, exp, log,
+    abs, square, sqrt, exp, log, expm1,
     median, std, var, quantile,
     addmm,
     isinf, isnan,
@@ -111,6 +111,7 @@ from torch import (
     allclose,
     argsort,
     stack,
+    squeeze,
     equal, searchsorted,
 )
 
@@ -122,9 +123,21 @@ def eval(*args) -> None:
     pass
 
 
+# noinspection PyShadowingNames
+def select(a: Array, *, where: Array = None) -> Array:
+    if where is None:
+        return a
+    return a[where]
+
+
 # noinspection PyShadowingBuiltins
 def sum(a: ArrayLike, axis: Axes = None, keepdims: bool = False, dtype: DType = None) -> Array:
     return torch.sum(tensor(a), dim=axis, keepdim=keepdims, dtype=dtype)
+
+
+# noinspection PyShadowingBuiltins
+def prod(a: ArrayLike, axis: Axes = None, keepdims: bool = False, dtype: DType = None) -> Array:
+    return torch.prod(tensor(a), dim=axis, keepdim=keepdims, dtype=dtype)
 
 
 # noinspection PyShadowingBuiltins

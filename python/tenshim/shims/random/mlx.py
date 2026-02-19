@@ -42,10 +42,10 @@ Generator: type[RNG] = None # mxr.Generator
 def default_rng(seed: int = None) -> RNG:
     return RNG(seed)
 
-def normal(loc: ArrayLike = 0.0, scale: ArrayLike = 1.0, shape: ShapeLike = ...) -> Array:
+def normal(loc: ArrayLike = 0., scale: ArrayLike = 1., shape: ShapeLike = ...) -> Array:
     return mxr.normal(shape=to_shape(shape), loc=loc, scale=scale)
 
-def uniform(low: ArrayLike = ..., high: ArrayLike = ..., shape: ShapeLike = ...) -> Array:
+def uniform(low: ArrayLike = 0., high: ArrayLike = 1., shape: ShapeLike = ...) -> Array:
     return mxr.uniform(low, high, shape=to_shape(shape))
 
 def permutation(size: int, **kwargs) -> Array:

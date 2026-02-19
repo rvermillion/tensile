@@ -402,7 +402,7 @@ class MulOp(ElementWiseBinaryOp):
                     data[idx] = self._evaluate(*tensor.args, index=idx)
                 else:
                     a = 1 - arg_index
-                    data[idx] += tensor.args[a].data[idx] * delta
+                    data[idx] += tensor.args[a].from_array[idx] * delta
 
         return None
 

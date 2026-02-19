@@ -7,7 +7,7 @@ from typing import Any, Optional, Self, Sequence
 from .. import ten
 from .common import Array, AxisChoice, Axes, Base, DType, Functional, Indices, Shape, TensorType
 from .util import broadcast_shapes, promote_types
-from .region import IndexedRegion, Region, RegionIndex
+from .region import IndexedRegion, Region, Regions, RegionIndex
 
 
 # class TensorDerivation:
@@ -62,7 +62,7 @@ class TensorOp(Base):
         raise NotImplementedError()
 
     def map_region(self, arg_index: int, region: Region) -> Region:
-        return Region.from_key(self.shape, ...)
+        return Regions.full(self.shape)
 
     @classmethod
     def build(cls, op: str, *args: TensorType, **options) -> Self:
@@ -89,10 +89,16 @@ class TensorOp(Base):
         else:
             print(f'Evaluating {self} with ({disp}) for region {region}')
 
-    def __repr__(self):
+    def name_with_options(self) -> str:
         if opts := self.options():
             return self.name + '[' + ', '.join(f'{k}={v!r}' for k, v in opts.items()) + ']'
         return self.name
+
+    def derivation(self, short: bool = False) -> str:
+        return self.name_with_options() + '(' + ", ".join(arg.display(short=short) for arg in self.args) + ')'
+
+    def __repr__(self):
+        return self.name_with_options()
 
     names: dict[str, type['TensorOp']] = {}
 
@@ -237,7 +243,7 @@ class TransposeOp(UnaryOp):
     def map_region(self, arg_index: int, region: Region) -> Region:
         if isinstance(region, IndexedRegion):
             indices = tuple(region.indices[a] for a in self.axes)
-            return IndexedRegion(self.shape, indices)
+            return Regions.indexed(self.shape, indices)
         return super().map_region(arg_index, region)
 
     @classmethod
@@ -395,9 +401,9 @@ class AxisUnaryOp(UnaryOp):
     def _compile_axis(cls, arg: TensorType, *, axis: AxisChoice = None, **kwargs) -> Optional[Axes]:
         axis = (axis, ) if isinstance(axis, int) else tuple(axis) if axis else None
         if axis:
-            ndims = len(arg.shape)
-            axis = tuple(ndims + a if a < 0 else a for a in axis)
-            if not all(0 <= a < ndims for a in axis):
+            ndim = len(arg.shape)
+            axis = tuple(ndim + a if a < 0 else a for a in axis)
+            if not all(0 <= a < ndim for a in axis):
                 raise ValueError(f"Axis {axis} out of bounds for shape {arg.shape}")
             return axis
         return None
@@ -427,16 +433,16 @@ class ExpandDimsOp(AxisUnaryOp):
                     a += 1
                 indices[a] = ind
                 a += 1
-            return IndexedRegion(self.shape, tuple(indices))
+            return Regions.indexed(self.shape, tuple(indices))
         return Region.from_key(self.shape, ...)
 
     @classmethod
     def _compile_axis(cls, arg: TensorType, *, axis: AxisChoice = None, **kwargs) -> Optional[Axes]:
         axis = (axis, ) if isinstance(axis, int) else tuple(axis) if axis else None
         if axis:
-            ndims = len(arg.shape) + len(axis)
-            axis = tuple(ndims + a if a < 0 else a for a in axis)
-            if not all(0 <= a < ndims for a in axis):
+            ndim = len(arg.shape) + len(axis)
+            axis = tuple(ndim + a if a < 0 else a for a in axis)
+            if not all(0 <= a < ndim for a in axis):
                 raise ValueError(f"Axis {axis} out of bounds for shape {arg.shape}")
             return axis
         raise ValueError(f'Cannot expand dims on {arg.shape} with axis {axis}')
@@ -452,6 +458,51 @@ class ExpandDimsOp(AxisUnaryOp):
                 a += 1
             shape[a] = s
             a += 1
+        return tuple(shape)
+
+
+class SqueezeOp(AxisUnaryOp):
+
+    __slots__ = ()
+
+    name = 'squeeze'
+
+    def _evaluate(self, a: Array, region: Region = None) -> Array:
+        return ten.squeeze(a, axis=self.axis)
+
+    def map_region(self, arg_index: int, region: Region) -> Region:
+        if isinstance(region, IndexedRegion):
+            indices = list(region.indices)
+            for a in self.axis:
+                del indices[a]
+            return Regions.indexed(self.shape, tuple(indices))
+        return Region.from_key(self.shape, ...)
+
+    @classmethod
+    def _compile_axis(cls, arg: TensorType, *, axis: AxisChoice = None, **kwargs) -> Optional[Axes]:
+        ndim = arg.ndim
+        if axis is None:
+            axis = tuple(i for i in range(ndim) if i == 1)
+        elif isinstance(axis, int):
+            if axis < 0:
+                axis += ndim
+            axis = axis,
+        else:
+            axis = tuple(a + ndim if a < 0 else a for a in axis)
+        if axis:
+            if not all(0 <= a < ndim for a in axis):
+                raise ValueError(f"Axis {axis} out of bounds for shape {arg.shape}")
+            shape = arg.shape
+            if not all(shape[a] == 1 for a in axis):
+                raise ValueError(f"Can only squeeze axes of dimension 1: {axis} out of bounds for shape {arg.shape}")
+            return axis
+        raise ValueError(f'Cannot squeeze {arg.shape} with axis {axis}')
+
+    @classmethod
+    def _compile_shape(cls, arg: TensorType, *, axis: Axes, **kwargs) -> Shape:
+        shape = list(arg.shape)
+        for a in axis:
+            del shape[a]
         return tuple(shape)
 
 
@@ -473,7 +524,7 @@ class ReduceOp(AxisUnaryOp):
             indices = tuple(ind for ind in orig_list if ind is not None)
             if len(indices) != len(self.shape):
                 raise ValueError(f'Cannot reduce {len(orig_list)} indices to {len(self.shape)}')
-            return IndexedRegion(self.shape, indices)
+            return Regions.indexed(self.shape, indices)
         return super().map_region(arg_index, region)
 
     def _options(self, opts: dict[str, Any]) -> None:
@@ -485,9 +536,9 @@ class ReduceOp(AxisUnaryOp):
     def _compile(cls, arg: TensorType, *, axis: AxisChoice = None, keepdims: bool = False, **kwargs) -> Self:
         axis = (axis, ) if isinstance(axis, int) else tuple(axis) if axis else None
         if axis:
-            ndims = len(arg.shape)
-            axis = tuple(ndims + a if a < 0 else a for a in axis)
-            if not all(0 <= a < ndims for a in axis):
+            ndim = len(arg.shape)
+            axis = tuple(ndim + a if a < 0 else a for a in axis)
+            if not all(0 <= a < ndim for a in axis):
                 raise ValueError(f"Axis {axis} out of bounds for shape {arg.shape}")
 
         shape = cls._compile_shape(arg, axis=axis, keepdims=keepdims, **kwargs)
@@ -612,32 +663,86 @@ class MatMulOp(BinaryOp):
         # return a[index] @ b[index]
 
     def map_region(self, arg_index: int, region: Region) -> Region:
+        shape = self.shape
+        if region.empty:
+            return Regions.empty(shape)
+        if not 0 <= arg_index <= 1:
+            raise ValueError(f'Invalid arg index {arg_index} for {self}')
         if isinstance(region, IndexedRegion):
-            indices = list(region.indices)
-            if arg_index == 0:
-                indices[-1] = RegionIndex.range(0, self.shape[-1])
-            elif arg_index == 1:
-                if self.ndim > 1:
-                    indices[-2] = RegionIndex.range(0, self.shape[-2])
+            # We special case vector-matrix and matrix-vector multiplication
+
+            if self.left.ndim == 1:
+                # The left arg is a 1D vector...
+
+                if arg_index == 0 or self.right.ndim == 1:
+                    # If the left vector is the one that changed or the right is also a 1D vector
+                    # we return a full region
+                    return Regions.full(shape)
+
+                # If the right arg is a matrix and is the one that changed, then we
+                # pass through all but the last contracted index which we set to fully changed
+                indices = list(region.indices[:-1])
+                indices[-1] = Regions.full_index(shape[-1])
+            elif self.right.ndim == 1:
+                # The right arg is a 1D vector....
+                if arg_index == 0:
+                    # If the left arg is the one that changed, then we pass through all
+                    # but the last index, which is contracted out of the shape
+                    indices = list(region.indices[:-1])
                 else:
-                    indices[-1] = RegionIndex.range(0, self.shape[-1])
-            return IndexedRegion(self.shape, tuple(indices))
-        return Region.from_key(self.shape, ...)
+                    return Regions.full(shape)
+            else:
+                # It's a (possibly batched) 2D by 2D matmul so we copy the region indexes
+                # and then change the right one based on the way changes flow through matrix
+                # multiplication
+
+                indices = list(region.indices)
+                if arg_index == 0:
+                    # If the left arg changed, then we make the last index be full
+                    indices[-1] = Regions.full_index(shape[-1])
+                else:
+                    # If the right arg changed, then we make the second to last index be full
+                    indices[-2] = Regions.full_index(shape[-2])
+            return Regions.indexed(shape, tuple(indices))
+        return Regions.full(shape)
 
     @classmethod
     def _compile(cls, left: TensorType, right: TensorType, **kwargs) -> Self:
         ls = left.shape
         rs = right.shape
-        if len(ls) == 1:
-            ls = 1, ls[0]
-        if len(rs) == 1:
+        ldim = len(ls)
+        rdim = len(rs)
+        if ldim == 0 or rdim == 0:
+            raise ValueError(f'Shape mismatch for {cls.name}: {ls} != {rs}')
+
+        if ldim == 1:
+            if rdim == 1:
+                if ls[-1] != rs[-1]:
+                    raise ValueError(f'Shape mismatch for {cls.name}: {ls} != {rs}')
+                shape = ()
+            else:
+                if ls[-1] != rs[-2]:
+                    raise ValueError(f'Shape mismatch for {cls.name}: {ls} != {rs}')
+                shape = rs[:-2] + (rs[-1],)
+        elif rdim == 1:
             if ls[-1] != rs[-1]:
                 raise ValueError(f'Shape mismatch for {cls.name}: {ls} != {rs}')
-            shape = broadcast_shapes(ls[:-2], rs[:-1]) + (ls[-2], )
+            shape = ls[:-1]
         else:
             if ls[-1] != rs[-2]:
                 raise ValueError(f'Shape mismatch for {cls.name}: {ls} != {rs}')
-            shape = broadcast_shapes(ls[:-2], rs[:-2]) + (ls[-2], rs[-1])
+            matrix_shape = ls[-2], rs[-1]
+            if ldim > 2 or rdim > 2:
+                lbs = ls[:-2]
+                rbs = rs[:-2]
+                batch_shape = broadcast_shapes(lbs, rbs)
+                if batch_shape != lbs:
+                    left = left.broadcast(batch_shape)
+                if batch_shape != rbs:
+                    right = right.broadcast(batch_shape)
+                shape = batch_shape + matrix_shape
+            else:
+                shape = matrix_shape
         dtype = promote_types(left.dtype, right.dtype)  # ten.promote_types(a.dtype, b.dtype)
         return cls(left, right, shape=shape, dtype=dtype)
 
@@ -842,6 +947,10 @@ class TensorOps:
     @staticmethod
     def expand_dims(arg: TensorType, *, axis: AxisChoice = None) -> ExpandDimsOp:
         return ExpandDimsOp.compile(arg, axis=axis)
+
+    @staticmethod
+    def squeeze(arg: TensorType, *, axis: AxisChoice = None) -> SqueezeOp:
+        return SqueezeOp.compile(arg, axis=axis)
 
     @staticmethod
     def transpose(arg: TensorType, *, axes: Axes = None) -> TransposeOp:
