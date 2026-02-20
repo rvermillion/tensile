@@ -8,36 +8,7 @@ from typing import Any, Sequence, TypeAlias, TypeGuard, TypeVar, Union
 import numpy as np
 import numpy.random as npr
 
-# from ..array import ArrayOrScalar, Shim, DType, RNG, Random
-from .common import Scalar, Shape, ShapeLike, Axis, Axes
-
-T = TypeVar('T')
-
-S = TypeVar('S', bound=Scalar)
-
-Array = np.ndarray
-DType = np.dtype
-RNG = npr.Generator
-
-DTypeLike: TypeAlias = Union[DType, str, type]
-MaybeTuple: TypeAlias = Union[T, tuple[T, ...]]
-AxisSelector: TypeAlias = Union[int, slice, 'Array', Ellipsis, None]
-Selector: TypeAlias = MaybeTuple[AxisSelector]
-ArrayLike: TypeAlias = Union['Array', Scalar, Sequence['ArrayLike']]
-ArrayOrScalar: TypeAlias = Union['Array', S]
-ArrayOrT: TypeAlias = Union['Array', T, Sequence[T]]
-ArrayOrFloat: TypeAlias = ArrayOrT[float]
-
-Stream = None
-
-class NumpyRandom():
-
-    Generator: type[RNG] = RNG
-
-    default_rng = staticmethod(npr.default_rng)
-
-    normal = staticmethod(npr.normal)
-    uniform = staticmethod(npr.uniform)
+from .types import *
 
 
 def is_monotonic_test(vals: Array, op: np.ufunc) -> bool:
@@ -70,9 +41,12 @@ from numpy import (
     sum, prod, max, min, mean, median, std, var, quantile, percentile,
     minimum, maximum, clip, average, argmax, argmin,
     cumsum, cumprod,
+    where,
+    argsort, argpartition,
+    any, all,
     floor, floor_divide,
     sort, searchsorted,
-    expand_dims,
+    expand_dims, squeeze, transpose,
     broadcast_to,
 )
 
@@ -93,20 +67,12 @@ def is_monotonic(vals: Array, strict: bool = False) -> bool:
             is_monotonic_test(vals, np.greater if strict else np.greater_equal))
 
 
-random: type[NumpyRandom] = NumpyRandom
-
-float64: DType = np.float64
-float32: DType = np.float32
-float16: DType = np.float16
-int64: DType = np.int64
-int32: DType = np.int32
-int16: DType = np.int16
-int8: DType = np.int8
-bool_: DType = np.bool_
+from . import functional, random
 
 
 __all__ = [
     'Array',
     'DType',
+    'functional',
     'random'
 ]

@@ -5,7 +5,7 @@
 
 import torch
 
-from ..torch import Shape, ShapeLike, ArrayLike, Array, DType, ArrayOrScalar
+from .types import Shape, ShapeLike, ArrayLike, Array, DType, ArrayOrScalar
 
 
 def to_shape(size: ShapeLike) -> Shape:

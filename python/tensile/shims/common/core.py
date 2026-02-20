@@ -3,19 +3,7 @@
 #  WARNING: CONFIDENTIAL TRADE SECRETS OF FULCRUM ANALYTICS, INC.
 #  UNAUTHORIZED COPYING, DISTRIBUTION, OR DISCLOSURE IS STRICTLY PROHIBITED
 
-from typing import TypeAlias, TypeVar, Union
-
-Scalar: TypeAlias = Union[int, float, bool]
-Shape: TypeAlias = tuple[int, ...]
-ShapeLike: TypeAlias = Union[int, Shape]
-Axis: TypeAlias = int
-Axes: TypeAlias = Union[None, int, tuple[int, ...]]
-T = TypeVar('T')
-
-S = TypeVar('S', bound=Scalar)
-
-MaybeTuple: TypeAlias = Union[T, tuple[T, ...]]
-
+from .types import *
 
 def size_of_shape(shape: Shape) -> int:
     size = 1

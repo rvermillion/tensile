@@ -13,7 +13,7 @@ from mlx.core.random import *
 #     uniform as mx_uniform,
 # )
 
-from ..mlx import Shape, ShapeLike, ArrayLike, Array, DType, ArrayOrScalar
+from .types import Shape, ShapeLike, ArrayLike, Array, DType, ArrayOrScalar
 
 
 def to_shape(size: ShapeLike) -> Shape:

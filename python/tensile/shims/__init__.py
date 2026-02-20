@@ -5,16 +5,16 @@
 
 from os import environ
 
-default_shim_name: str = environ.get('TENSHIM', 'numpy')
+default_shim_name: str = environ.get('TENSILE', 'mlx')
 
 if default_shim_name == 'numpy':
-    from . import numpy as default
+    from .numpy import core
 
 elif default_shim_name == 'mlx':
-    from . import mlx as default
+    from .mlx import core
 
 elif default_shim_name == 'torch':
-    from . import torch as default
+    from .torch import core
 
 else:
     raise NotImplementedError(f'No tensor shim named {default_shim_name} found!')

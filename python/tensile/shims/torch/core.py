@@ -8,21 +8,10 @@ from typing import Any, Sequence, TypeAlias, TypeGuard, Union
 import torch
 import numpy as np
 
-from .common import Scalar, MaybeTuple, S, T, Shape, ShapeLike, Axis, Axes
+from .types import *
 
 TorchArray: TypeAlias = torch.Tensor
 TorchDType: TypeAlias = torch.Type
-
-Array: TypeAlias = torch.Tensor
-DType: TypeAlias = torch.dtype
-
-DTypeLike: TypeAlias = Union[DType, str, type]
-AxisSelector: TypeAlias = Union[int, slice, 'Array', Ellipsis, None]
-Selector: TypeAlias = MaybeTuple[AxisSelector]
-ArrayLike: TypeAlias = Union['Array', Scalar, Sequence['ArrayLike'], np.ndarray]
-ArrayOrScalar: TypeAlias = Union['Array', S]
-ArrayOrT: TypeAlias = Union['Array', T, Sequence[T]]
-ArrayOrFloat: TypeAlias = ArrayOrT[float]
 
 
 def to_shape(size: ShapeLike) -> Shape:
@@ -123,6 +112,9 @@ def eval(*args) -> None:
     pass
 
 
+def transpose(a: Array, axes: Axes = None) -> Array:
+    return a.permute(axes)
+
 # noinspection PyShadowingNames
 def select(a: Array, *, where: Array = None) -> Array:
     if where is None:
@@ -219,15 +211,5 @@ def is_monotonic(vals: TorchArray, strict: bool = False) -> bool:
     return (is_monotonic_test(vals, torch.less if strict else torch.less_equal) or
             is_monotonic_test(vals, torch.greater if strict else torch.greater_equal))
 
-from .random import torch as random
-from .functional import torch as functional
+from . import functional, random
 
-
-float64: DType = torch.float32
-float32: DType = torch.float32
-float16: DType = torch.float16
-int64: DType = torch.int64
-int32: DType = torch.int32
-int16: DType = torch.int16
-int8: DType = torch.int8
-bool_: DType = torch.uint8

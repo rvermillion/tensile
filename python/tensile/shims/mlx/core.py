@@ -9,19 +9,7 @@ import mlx.core as mx
 import mlx.core.random as mxr
 import numpy as np
 
-from .common import *
-
-Array: TypeAlias = mx.array
-DType: TypeAlias = mx.Dtype
-
-DTypeLike: TypeAlias = Union[DType, str, type]
-MaybeTuple: TypeAlias = Union[T, tuple[T, ...]]
-AxisSelector: TypeAlias = Union[int, slice, 'Array', Ellipsis, None]
-Selector: TypeAlias = MaybeTuple[AxisSelector]
-ArrayLike: TypeAlias = Union['Array', Scalar, Sequence['ArrayLike'], np.ndarray]
-ArrayOrScalar: TypeAlias = Union['Array', S]
-ArrayOrT: TypeAlias = Union['Array', T, Sequence[T]]
-ArrayOrFloat: TypeAlias = ArrayOrT[float]
+from .types import *
 
 
 def to_shape(size: ShapeLike) -> Shape:
@@ -145,10 +133,7 @@ def softmax(a: ArrayLike, axis: Axes = None, keepdims: bool = False, dtype: DTyp
     return out
 
 
-from .fast import mlx as fast
-from .linalg import mlx as linalg
-from .random import mlx as random
-from .functional import mlx as functional
+from . import fast, linalg, random, functional
 
 
 ten_kind: str = 'mlx'
@@ -262,19 +247,5 @@ def pack_front_sort(a: Array, where: Array, *, fill_value=0, index_dtype: DType 
     mask = mx.arange(n, dtype=index_dtype) < count
     out = mx.where(mask, a_sorted, out)  # broadcast count
     return out, count
-
-
-float64: DType = mx.float32
-float32: DType = mx.float32
-float16: DType = mx.float16
-int64: DType = mx.int64
-int32: DType = mx.int32
-int16: DType = mx.int16
-int8: DType = mx.int8
-uint64: DType = mx.uint64
-uint32: DType = mx.uint32
-uint16: DType = mx.uint16
-uint8: DType = mx.uint8
-bool_: DType = mx.uint8
 
 

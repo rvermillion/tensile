@@ -5,7 +5,7 @@
 
 import mlx.core as mx
 
-from ..mlx import Array
+from .types import Array
 
 cpu_device = mx.Device(mx.cpu)
 cpu_stream = mx.new_stream(cpu_device)

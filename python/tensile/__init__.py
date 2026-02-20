@@ -11,8 +11,9 @@ from typing import TYPE_CHECKING
 #     pass
 #     from .shims import mlx as ten
 #     from .shims import torch as ten
-from .shims import mlx as ten
+# from .shims.mlx import core as ten
 # from .shims import torch as ten
+from .shims import core as ten
 
 Array = ten.Array
 ArrayLike = ten.ArrayLike

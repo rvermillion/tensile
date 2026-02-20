@@ -434,6 +434,6 @@ def test():
 
     exit(0)
 
-# from .toe import test_toe
-# test_toe()
+from .toe import test_toe
+test_toe()
 test()

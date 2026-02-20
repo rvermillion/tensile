@@ -3,7 +3,7 @@
 #  WARNING: CONFIDENTIAL TRADE SECRETS OF FULCRUM ANALYTICS, INC.
 #  UNAUTHORIZED COPYING, DISTRIBUTION, OR DISCLOSURE IS STRICTLY PROHIBITED
 
-from ..api import Array, ArrayLike, DType, ShapeLike
+from .types import Array, ArrayLike, DType, ShapeLike
 
 def normal(loc: ArrayLike = 0.0, scale: ArrayLike = 1.0, shape: ShapeLike = ...) -> Array: ...
 
