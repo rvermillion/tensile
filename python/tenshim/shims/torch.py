@@ -100,7 +100,7 @@ from torch import (
     addmm,
     isinf, isnan,
     matmul,
-    minimum, maximum, clip,
+    minimum, clip,
     argmin, argmax,
     floor, floor_divide,
     sort, where,
@@ -128,6 +128,9 @@ def select(a: Array, *, where: Array = None) -> Array:
     if where is None:
         return a
     return a[where]
+
+def maximum(a: ArrayLike, b: ArrayLike) -> Array:
+    return torch.maximum(tensor(a), tensor(b))
 
 
 # noinspection PyShadowingBuiltins

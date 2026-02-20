@@ -668,7 +668,7 @@ def test_toe():
     prep = ten.random.normal(shape=(1000, M)) * scale
     show('prep data', prep)
 
-    tree.prepare(prep)
+    # tree.prepare(prep)
 
     x = ten.random.normal(shape=(B, M))
     show('x', x)

@@ -10,6 +10,7 @@ from .common import Array, Base, Index, Indices, Shape, Slice
 
 full_slice = slice(None)
 empty_slice = slice(0, 0)
+index_dtype = ten.int32
 
 
 T = TypeVar('T', bound='SetLike')
@@ -349,7 +350,7 @@ class RegionIndex(SetLike['RegionIndex']):
         if ostart >= sstop or ostop <= sstart:
             return self
         if other.contiguous:
-            if ostart < sstart and ostop > sstop:
+            if ostart <= sstart and ostop >= sstop:
                 return EmptyIndex.singleton
             if self.contiguous:
                 if ostart <= sstart:
@@ -561,7 +562,7 @@ class IntIndex(RegionIndex):
             raise ValueError(f'Index out of bounds: {self.index} >= {size}')
 
     def array(self) -> Array:
-        return ten.array([self.index])
+        return ten.array([self.index], dtype=index_dtype)
 
     def iter(self) -> Iterable[int]:
         return self.index,
@@ -586,6 +587,11 @@ class IntIndex(RegionIndex):
     def union(self, other: RegionIndex) -> RegionIndex:
         if other.has(self.index):
             return other
+        if isinstance(other, ContiguousRangeIndex):
+            if self.index == other.stop:
+                return ContiguousRangeIndex(other.start, other.stop + 1)
+            if self.index == other.start - 1:
+                return ContiguousRangeIndex(other.start - 1, other.stop)
         return super().union(other)
 
     def minus(self, other: RegionIndex) -> RegionIndex:

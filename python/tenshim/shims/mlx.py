@@ -102,6 +102,7 @@ from mlx.core import (
     abs, square, sqrt, exp, log, expm1,
     sum, max, min, mean, std, var, logsumexp, prod,
     cumsum, cumprod, cummax, cummin,
+    clip,
     addmm,
     isinf, isnan,
     matmul,

@@ -88,6 +88,11 @@ def flatten(a: 'Tensor', start_index: int = 0, end_index: int = -1, name: str = 
     return DerivedTensor.new(op=TensorOps.reshape(a, shape=shape), name=name)
 
 
+# noinspection PyShadowingNames,PyShadowingBuiltins
+def clip(a: 'Tensor', min: ten.Scalar|Array|None = None, max: ten.Scalar|Array|None = None, name: str = None) -> 'Tensor':
+    return DerivedTensor.new(op=TensorOps.clip(a, min=min, max=max), name=name)
+
+
 def functional(a: 'Tensor', func: Union[str, Functional], name: str = None) -> 'Tensor':
     if isinstance(func, str):
         func = getattr(ten.functional, func)
@@ -120,6 +125,14 @@ def mul(a: 'Tensor', b: 'Tensor', name: str = None) -> 'Tensor':
 
 def matmul(a: 'Tensor', b: 'Tensor', name: str = None) -> 'Tensor':
     return DerivedTensor.new(op=TensorOps.matmul(a, b), name=name)
+
+
+def maximum(a: 'Tensor', b: 'Tensor', name: str = None) -> 'Tensor':
+    return DerivedTensor.new(op=TensorOps.maximum(a, b), name=name)
+
+
+def minimum(a: 'Tensor', b: 'Tensor', name: str = None) -> 'Tensor':
+    return DerivedTensor.new(op=TensorOps.minimum(a, b), name=name)
 
 
 def from_array(a: Array, shape: Shape = None, dtype: DType = None, name: str = None) -> 'Tensor':
@@ -417,10 +430,10 @@ def test():
     for x in t:
         print(x.name, '=', x.shape, '=', x.get())
 
-    print('ops:', ', '.join(TensorOp.names.keys()))
+    # print('ops:', ', '.join(TensorOp.names.keys()))
 
     exit(0)
 
-from .toe import test_toe
-test_toe()
+# from .toe import test_toe
+# test_toe()
 test()

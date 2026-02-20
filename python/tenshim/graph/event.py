@@ -25,8 +25,9 @@ class TensorEvent(Base):
     def region(self) -> RegionType:
         return self.patch.region
 
-    def _repr_item_dict(self) -> Optional[dict[str, Any]]:
-        return {'source': self.source, 'region': self.region, 'data': self.data}
+    def _repr_item_dict(self, short: bool = False) -> Optional[dict[str, Any]]:
+        items = {'source': self.source, 'region': self.region}
+        return items
 
     @classmethod
     def create(cls, source: TensorType, region: RegionType, data: Array = None) -> 'TensorEvent':

@@ -37,8 +37,9 @@ def default_rng(seed: int = None) -> RNG:
 def normal(loc: ArrayLike = 0.0, scale: ArrayLike = 1.0, shape: ShapeLike = ...) -> Array:
     return torch.normal(mean=loc, std=scale, size=to_shape(shape))
 
-def uniform(low: ArrayLike = ..., high: ArrayLike = ..., shape: ShapeLike = ...) -> Array:
-    return torch.uniform(low, high, size=to_shape(shape))
+def uniform(low: ArrayLike = 0.0, high: ArrayLike = 1.0, shape: ShapeLike = ...) -> Array:
+    u = torch.rand(to_shape(shape))
+    return low + (high - low) * u
 
 def permutation(size: int, **kwargs) -> Array:
     return torch.randperm(size)

@@ -275,6 +275,35 @@ class ElementWiseUnaryOp(UnaryOp):
         return arg.dtype
 
 
+class ClipOp(ElementWiseUnaryOp):
+
+    __slots__ = ('min', 'max')
+
+    min: Optional[Array]
+    max: Optional[Array]
+
+    name = 'clip'
+
+    # noinspection PyShadowingBuiltins
+    def __init__(self, arg: TensorType, min: Optional[Array], max: Optional[Array], shape: Shape, dtype: DType):
+        super().__init__(arg, shape, dtype)
+        if min is None and max is None:
+            raise ValueError('Must specify at least one of min or max')
+        self.min = min
+        self.max = max
+
+    def _evaluate(self, a: Array, region: Region = None) -> Array:
+        return ten.clip(a, self.min, self.max)
+
+    @classmethod
+    def _compile(cls, arg: TensorType, min: ten.Scalar | Array | None = None, max: ten.Scalar | Array | None = None, **kwargs) -> Self:
+        if min is not None and not ten.is_array(min):
+            min = ten.array(min)
+        if max is not None and not ten.is_array(max):
+            max = ten.array(max)
+        return cls(arg, min=min, max=max, shape=arg.shape, dtype=cls._compile_dtype(arg))
+
+
 class FunctionOp(ElementWiseUnaryOp):
 
     __slots__ = ()
@@ -881,6 +910,25 @@ class MulOp(ElementWiseBinaryOp):
     #
     #     return None
 
+class MaximumOp(ElementWiseBinaryOp):
+
+    __slots__ = ()
+
+    name = 'maximum'
+
+    def _evaluate(self, a: Array, b: Array, region: Region = None) -> Array:
+        return ten.maximum(a, b)
+
+
+class MinimumOp(ElementWiseBinaryOp):
+
+    __slots__ = ()
+
+    name = 'minimum'
+
+    def _evaluate(self, a: Array, b: Array, region: Region = None) -> Array:
+        return ten.minimum(a, b)
+
 
 class TensorOps:
 
@@ -907,6 +955,14 @@ class TensorOps:
     @staticmethod
     def matmul(left: TensorType, right: TensorType) -> MatMulOp:
         return MatMulOp.compile(left, right)
+
+    @staticmethod
+    def maximum(left: TensorType, right: TensorType) -> MaximumOp:
+        return MaximumOp.compile(left, right)
+
+    @staticmethod
+    def minimum(left: TensorType, right: TensorType) -> MinimumOp:
+        return MinimumOp.compile(left, right)
 
     @staticmethod
     def broadcast(arg: TensorType, *, shape: Shape) -> BroadcastOp:
@@ -951,6 +1007,11 @@ class TensorOps:
     @staticmethod
     def squeeze(arg: TensorType, *, axis: AxisChoice = None) -> SqueezeOp:
         return SqueezeOp.compile(arg, axis=axis)
+
+    # noinspection PyShadowingBuiltins
+    @staticmethod
+    def clip(arg: TensorType, *, min: ten.Scalar|Array|None = None, max: ten.Scalar|Array|None = None) -> ClipOp:
+        return ClipOp.compile(arg, min=min, max=max)
 
     @staticmethod
     def transpose(arg: TensorType, *, axes: Axes = None) -> TransposeOp:
