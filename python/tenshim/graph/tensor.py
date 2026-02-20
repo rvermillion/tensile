@@ -4,13 +4,12 @@
 #  UNAUTHORIZED COPYING, DISTRIBUTION, OR DISCLOSURE IS STRICTLY PROHIBITED
 
 from typing import Optional, Union
-from .. import ten
 
-from .common import Array, Axes, AxisChoice, Base, DType, Functional, Indices, Shape
+from .common import Array, Axes, AxisChoice, Base, DType, Functional, Indices, Shape, ten
 from .op import TensorOp, TensorOps
 from .region import Region, Regions
 from .event import TensorEvent
-from .util import int_log2
+from .util import int_log2, show_array
 
 
 # noinspection PyShadowingBuiltins
@@ -422,149 +421,6 @@ def test():
 
     exit(0)
 
-def test_tree():
-
-    def indent(x, ind: str = None, n=4):
-        if ind is None: ind = ' ' * n
-        sep = '\n' + ind
-        return sep.join(str(x).split('\n'))
-
-    def show(name: str, _a: Array):
-        msg = f'{name}: {_a.shape} '
-        print(f'\n{msg}{indent(_a, n=len(msg))}')
-
-    depth = 4
-    size = 1 << depth
-    # offset = 0
-    shift = 1
-    node_count = size - shift
-    leaf_count = size >> 1
-    parent_count = node_count - leaf_count
-    top_k = depth << 1
-
-    print('depth:', depth, 'size:', size, 'node count:', node_count,
-          'leaf count:', leaf_count, 'parent count:', parent_count,
-          'top k:', top_k)
-
-    nodes = ten.arange(shift, size, dtype=ten.int32)
-    show('nodes', nodes)
-
-    leaf_nodes = nodes[-leaf_count:]
-    show('leaf nodes', leaf_nodes)
-
-    paths = leaf_nodes.reshape(leaf_count, 1) >> ten.arange(depth, -1, -1)
-    # if shift != 0:
-    #     paths = paths - shift
-    show('paths', paths)
-
-    # parents = paths >> 1
-    parents = paths[:, :-1]
-    show('parents', parents)
-
-    if ten.any(parents > parent_count).item():
-        raise ValueError(
-            f'Parent indices {parents} are out of bounds for a tree of depth {depth} and size {size}.'
-        )
-
-    children = paths[:, 1:]
-    show('children', children)
-
-    left = ten.random.uniform(shape=(parent_count,))
-    right = 1. - left
-    # if offset > 0:
-    #     left[:offset] = 1.
-    #     right[:offset] = 1.
-    show('left', left)
-    show('right', right)
-
-    p = parents if shift == 0 else parents - shift
-    splits = ten.where(children % 2, left[p], right[p])
-    show('splits', splits)
-
-    path_weights = ten.cumprod(splits, axis=-1)
-    show('path weights', path_weights)
-
-    # leaf_weights = weights[:, -1]
-    # p('leaf weights:', leaf_weights.shape, leaf_weights)
-
-    # layers = ten.array(1) << ten.arange(depth)
-    # show('layers', layers)
-    #
-    # rev_layers = layers[-2::-1]
-    # show('reversed layers', rev_layers)
-    #
-    # weight_vector = weights[]
-
-    show('children', children)
-
-    child_nodes = nodes[1:]
-    show('child nodes', child_nodes)
-
-    # log2 = ten.log(ten.array(2))
-    # i = (ten.log(child_nodes)//log2).astype(ten.int32)
-
-    i = int_log2(child_nodes, max_bits=depth)
-    col = i - 1
-    show('col', col)
-
-    j = (depth-1) - i
-    # show('j', j)
-
-    k = child_nodes - (ten.array(1) << i)
-    # show('k', k)
-
-    row = k << j
-    show('row', row)
-
-    pluck = children[row, col]
-    show('pluck', pluck)
-    if not ten.all(pluck[1:] == pluck[:-1] + 1).item():
-        raise ValueError('Expected pluck to be monotonic')
-
-    weights = ten.ones((node_count, ), dtype=ten.float32)
-    weights[1:] = path_weights[row, col]
-    show('weights', weights)
-    if top_k > 0:
-        sorted_ind = ten.argsort(weights)
-        show('sorted indices', sorted_ind)
-        top_ind = sorted_ind[-top_k:]
-        show('top indices', top_ind)
-        weights = weights[top_ind]
-        show('top weights', weights)
-    total_weight = ten.sum(weights, axis=-1, keepdims=True) + 1.
-    show('total weight', total_weight)
-    weights = weights / total_weight
-    show('normalized weights', weights)
-
-    root_weight = 1. / total_weight
-
-    show('new total weight', ten.sum(weights) + root_weight)
-    value_dim = 1
-
-    # values = ten.random.normal(shape=(node_count,))
-    step = 100
-    values = ten.arange(100, 100+(value_dim * node_count * step), step, dtype=ten.float32).reshape(node_count, value_dim)
-
-    show('values', values)
-
-    if top_k > 0:
-        top_values = values[..., top_ind+1, :]
-    else:
-        top_values = values[..., 1:, :]
-    # if offset > 0:
-    #     values[:offset] = 0.
-    show('top values', top_values)
-
-    weighted_values = top_values[..., :, :] * weights[..., :, None]
-    show('weighted values', weighted_values)
-
-    root_value = values[..., 0, :]
-    show('root value', root_value)
-
-    summed = root_value/total_weight + ten.sum(weighted_values)
-    show('summed', summed)
-
-    exit(0)
-
-test_tree()
+from .toe import test_toe
+test_toe()
 test()

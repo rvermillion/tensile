@@ -3,6 +3,8 @@
 #  WARNING: CONFIDENTIAL TRADE SECRETS OF FULCRUM ANALYTICS, INC.
 #  UNAUTHORIZED COPYING, DISTRIBUTION, OR DISCLOSURE IS STRICTLY PROHIBITED
 
+import numpy as np
+from typing import Callable
 from .common import Array, DType, Shape, ten
 
 def promote_types(a: DType, b: DType) -> DType:
@@ -82,8 +84,32 @@ def int_log2(x: Array, max_bits: int = None, check: bool = False) -> Array:
         if bits == 0: return r
         x = x >> t
 
+
+def indent_str(x, indent: int | str = '') -> str:
+    if not isinstance(indent, str): indent = ' ' * indent
+    sep = '\n' + indent
+    return sep.join(str(x).split('\n'))
+
+
+def show_array(x: Array, prefix: str = None, indent: bool | int | str = True, out: Callable = print, **printoptions):
+    if indent is True:
+        indent = len(prefix) if prefix else ''
+    out(prefix, end='')
+    if printoptions:
+        out('array(', end='')
+        indent = indent + 6 if isinstance(indent, int) else indent + ' ' * 6
+        with np.printoptions(**printoptions):
+            out(indent_str(np.array(x), indent=indent), end='')
+        out(')')
+    else:
+        out(indent_str(x, indent=indent))
+
+
+
 __all__ = [
     'broadcast_shapes',
+    'indent_str',
     'int_log2',
     'promote_types',
+    'show_array',
 ]
