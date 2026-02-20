@@ -26,9 +26,13 @@ from mlx.core.linalg import (
     qr,
     solve as builtin_solve,
     solve_triangular as builtin_solve_triangular,
-    svd,
+    svd as builtin_svd,
     tri_inv,
 )
+
+
+def svd(a: Array, compute_uv: bool = True, *, stream: None | mx.Stream | mx.Device = None) -> tuple[Array, Array, Array]:
+    return builtin_svd(a, compute_uv=compute_uv, stream=cpu_stream if stream is None else stream)
 
 
 def cholesky(a: Array, upper: bool = False, *, stream: None | mx.Stream | mx.Device = None) -> Array:
