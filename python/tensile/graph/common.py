@@ -3,7 +3,9 @@ from typing import (Any, Callable, Iterable, Optional, Self, Sequence,
                     TypeAlias, Union, TYPE_CHECKING)
 
 from ..shims import core as ten
-from .log import Logging
+from ..infrastructure.log import Logging
+from ..infrastructure.represent import Representable
+
 
 
 if TYPE_CHECKING:
@@ -40,7 +42,7 @@ def repr_item(item: tuple[str, Any]) -> str:
 auto_validate: bool = True
 
 
-class Base(Logging):
+class Base(Logging, Representable):
 
     __slots__ = ()
 

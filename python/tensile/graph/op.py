@@ -81,9 +81,9 @@ class TensorOp(Base):
     def print_evaluating(self, *args: Array, region: Region = None) -> None:
         disp = ', '.join(str(arg) for arg in args)
         if region is None:
-            print(f'Evaluating {self} with ({disp})')
+            self.info(f'Evaluating {self} with ({disp})')
         else:
-            print(f'Evaluating {self} with ({disp}) for region {region}')
+            self.info(f'Evaluating {self} with ({disp}) for region {region}')
 
     def name_with_options(self) -> str:
         if opts := self.options():
