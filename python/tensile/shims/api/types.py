@@ -1,8 +1,4 @@
-#  Copyright (c) 2026. Fulcrum Analytics, Inc. All Rights Reserved.
-#  This file is part of the Fulcrum Impact product and the property of Fulcrum Analytics, Inc.
-#  WARNING: CONFIDENTIAL TRADE SECRETS OF FULCRUM ANALYTICS, INC.
-#  UNAUTHORIZED COPYING, DISTRIBUTION, OR DISCLOSURE IS STRICTLY PROHIBITED
-
+#  Copyright (c) 2026. Richard Vermillion. All Rights Reserved.
 from typing import Iterator, Protocol, Sequence, TypeAlias, Union
 from ..common.types import *
 
@@ -136,3 +132,33 @@ uint32: DType
 uint16: DType
 uint8: DType
 bool_: DType
+
+
+__all__ = [
+    'Array',
+    'ArrayLike',
+    'ArrayOrScalar',
+    'ArrayOrT',
+    'ArrayOrFloat',
+    'Axis',
+    'Axes',
+    'AxisSelector',
+    'DType',
+    'DTypeLike',
+    'Scalar',
+    'Selector',
+    'Shape',
+    'ShapeLike',
+    'float64',
+    'float32',
+    'float16',
+    'int64',
+    'int32',
+    'int16',
+    'int8',
+    'uint64',
+    'uint32',
+    'uint16',
+    'uint8',
+    'bool_',
+]

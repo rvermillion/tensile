@@ -1,10 +1,7 @@
-#  Copyright (c) 2025. Fulcrum Analytics, Inc. All Rights Reserved.
-#  This file is part of the Fulcrum Impact product and the property of Fulcrum Analytics, Inc.
-#  WARNING: CONFIDENTIAL TRADE SECRETS OF FULCRUM ANALYTICS, INC.
-#  UNAUTHORIZED COPYING, DISTRIBUTION, OR DISCLOSURE IS STRICTLY PROHIBITED
+#  Copyright (c) 2025. Richard Vermillion. All Rights Reserved.
 
-from typing import TYPE_CHECKING
-
+# from typing import TYPE_CHECKING
+#
 # if TYPE_CHECKING:
 #     from .shims import api as ten
 # else:
@@ -13,7 +10,10 @@ from typing import TYPE_CHECKING
 #     from .shims import torch as ten
 # from .shims.mlx import core as ten
 # from .shims import torch as ten
-from .shims import core as ten
+
+from .shims import core
+
+ten = core
 
 Array = ten.Array
 ArrayLike = ten.ArrayLike

@@ -1,8 +1,4 @@
-#  Copyright (c) 2025. Fulcrum Analytics, Inc. All Rights Reserved.
-#  This file is part of the Fulcrum Impact product and the property of Fulcrum Analytics, Inc.
-#  WARNING: CONFIDENTIAL TRADE SECRETS OF FULCRUM ANALYTICS, INC.
-#  UNAUTHORIZED COPYING, DISTRIBUTION, OR DISCLOSURE IS STRICTLY PROHIBITED
-
+#  Copyright (c) 2025. Richard Vermillion. All Rights Reserved.
 import numpy as np
 import mlx.core as mx
 import mlx.core.random as mxr

@@ -1,14 +1,7 @@
-#  Copyright (c) 2025. Fulcrum Analytics, Inc. All Rights Reserved.
-#  This file is part of the Fulcrum Impact product and the property of Fulcrum Analytics, Inc.
-#  WARNING: CONFIDENTIAL TRADE SECRETS OF FULCRUM ANALYTICS, INC.
-#  UNAUTHORIZED COPYING, DISTRIBUTION, OR DISCLOSURE IS STRICTLY PROHIBITED
-
-#  Copyright (c) 2025. Fulcrum Analytics, Inc. All Rights Reserved.
-#  This file is part of the Fulcrum Impact product and the property of Fulcrum Analytics, Inc.
-#  WARNING: CONFIDENTIAL TRADE SECRETS OF FULCRUM ANALYTICS, INC.
-#  UNAUTHORIZED COPYING, DISTRIBUTION, OR DISCLOSURE IS STRICTLY PROHIBITED
-
+#  Copyright (c) 2025. Richard Vermillion. All Rights Reserved.
+#  Copyright (c) 2025. Richard Vermillion. All Rights Reserved.
 import math
+from typing import Any, Protocol, TypeGuard
 from ..common.core import *
 
 from .types import *

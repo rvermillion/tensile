@@ -1,15 +1,13 @@
-#  Copyright (c) 2025. Fulcrum Analytics, Inc. All Rights Reserved.
-#  This file is part of the Fulcrum Impact product and the property of Fulcrum Analytics, Inc.
-#  WARNING: CONFIDENTIAL TRADE SECRETS OF FULCRUM ANALYTICS, INC.
-#  UNAUTHORIZED COPYING, DISTRIBUTION, OR DISCLOSURE IS STRICTLY PROHIBITED
+#  Copyright (c) 2025. Richard Vermillion. All Rights Reserved.
 
-from typing import Any, Literal, Sequence, TypeAlias, TypeGuard, Union
+from typing import Any, Literal, TypeGuard
 
 import mlx.core as mx
 import mlx.core.random as mxr
 import numpy as np
 
 from .types import *
+from ..common.core import *
 
 
 def to_shape(size: ShapeLike) -> Shape:
@@ -98,7 +96,7 @@ from mlx.core import (
     argmin, argmax,
     floor, floor_divide,
     sort, where,
-    eval,
+    eval, async_eval,
     expand_dims, squeeze,
     save_safetensors,
     swapaxes, transpose,
@@ -109,10 +107,18 @@ from mlx.core import (
     argsort,
     stack, array_equal,
     equal,
-    stream,
+    stream, new_stream, default_stream,
     Stream,
     load, save,
+    get_peak_memory,
+    set_wired_limit,
+    device_info, default_device,
+    synchronize,
+    metal,
+    quantize, quantized_matmul,
 )
+
+clear_cache = metal.clear_cache
 
 
 def softmax(a: ArrayLike, axis: Axes = None, keepdims: bool = False, dtype: DType = None) -> Array:

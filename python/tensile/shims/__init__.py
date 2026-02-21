@@ -1,20 +1,21 @@
-#  Copyright (c) 2025. Fulcrum Analytics, Inc. All Rights Reserved.
-#  This file is part of the Fulcrum Impact product and the property of Fulcrum Analytics, Inc.
-#  WARNING: CONFIDENTIAL TRADE SECRETS OF FULCRUM ANALYTICS, INC.
-#  UNAUTHORIZED COPYING, DISTRIBUTION, OR DISCLOSURE IS STRICTLY PROHIBITED
-
+#  Copyright (c) 2025. Richard Vermillion. All Rights Reserved.
 from os import environ
+from typing import TYPE_CHECKING
 
-default_shim_name: str = environ.get('TENSILE', 'mlx')
-
-if default_shim_name == 'numpy':
-    from .numpy import core
-
-elif default_shim_name == 'mlx':
-    from .mlx import core
-
-elif default_shim_name == 'torch':
-    from .torch import core
+if TYPE_CHECKING:
+    from .mlx import core, types
 
 else:
-    raise NotImplementedError(f'No tensor shim named {default_shim_name} found!')
+    default_shim_name: str = environ.get('TENSILE', 'mlx')
+
+    if default_shim_name == 'numpy':
+        from .numpy import core, types
+
+    elif default_shim_name == 'mlx':
+        from .mlx import core, types
+
+    elif default_shim_name == 'torch':
+        from .torch import core, types
+
+    else:
+        raise NotImplementedError(f'No tensor shim named {default_shim_name} found!')

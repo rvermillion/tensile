@@ -1,23 +1,19 @@
-#  Copyright (c) 2026. Fulcrum Analytics, Inc. All Rights Reserved.
-#  This file is part of the Fulcrum Impact product and the property of Fulcrum Analytics, Inc.
-#  WARNING: CONFIDENTIAL TRADE SECRETS OF FULCRUM ANALYTICS, INC.
-#  UNAUTHORIZED COPYING, DISTRIBUTION, OR DISCLOSURE IS STRICTLY PROHIBITED
-
+#  Copyright (c) 2026. Richard Vermillion. All Rights Reserved.
 from typing import (Any, Callable, Iterable, Optional, Self, Sequence,
                     TypeAlias, Union, TYPE_CHECKING)
 
-from .. import ten
+from ..shims import core as ten
 from .log import Logging
 
 
 if TYPE_CHECKING:
-    import tenshim.graph.tensor
-    import tenshim.graph.region
-    import tenshim.graph.patch
+    import tensile.graph.tensor
+    import tensile.graph.region
+    import tensile.graph.patch
 
-TensorType: TypeAlias = 'tenshim.graph.tensor.Tensor'
-RegionType: TypeAlias = 'tenshim.graph.region.Region'
-PatchType: TypeAlias = 'tenshim.graph.patch.Patch'
+TensorType: TypeAlias = 'tensile.graph.tensor.Tensor'
+RegionType: TypeAlias = 'tensile.graph.region.Region'
+PatchType: TypeAlias = 'tensile.graph.patch.Patch'
 
 Array: TypeAlias = ten.Array
 DType: TypeAlias = ten.DType
