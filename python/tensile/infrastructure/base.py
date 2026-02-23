@@ -2,7 +2,7 @@
 import json
 
 from .meta import ObjectMeta, Meta, RootObject, Spec, UpdateableObject, field
-from .types import Annotated, Any, Callable, ClassVar, Keywords, Mapping, Optional, Self, Sequence
+from .types import Annotated, Any, Callable, ClassVar, Keywords, Mapping, Optional, Self, Sequence, TypeVar
 from .util import process_specs
 
 
@@ -33,6 +33,15 @@ def noop_init(self, spec: Keywords, **kwargs):
     pass
 
 
+T = TypeVar('T', bound='Object')
+
+LIFECYCLE_PREINIT = 1
+LIFECYCLE_INIT = 2
+LIFECYCLE_POSTINIT = 3
+LIFECYCLE_READY = 4
+LIFECYCLE_ERROR = 100
+
+
 class Object(UpdateableObject):
 
     __slots__ = ['spec']
@@ -52,11 +61,22 @@ class Object(UpdateableObject):
     # )]] = None
 
     def __init__(self, spec: Keywords = None, /, **kwargs):
-        spec = Spec.combine(spec, kwargs)
+        spec = self._combine_spec(spec, kwargs)
+        # spec = Spec.combine(spec, kwargs)
         self.spec = spec
+        self.set_lifecycle(LIFECYCLE_PREINIT)
         self.preinit(spec)
+        self.set_lifecycle(LIFECYCLE_INIT)
         self.init(spec)
+        self.set_lifecycle(LIFECYCLE_POSTINIT)
         self.postinit(spec)
+        self.set_lifecycle(LIFECYCLE_READY)
+
+    def _combine_spec(self, spec: Keywords, kwargs: Keywords) -> Spec:
+        return Spec.combine(spec, kwargs)
+
+    def set_lifecycle(self, lifecycle: int):
+        pass
 
     def preinit(self, spec: Spec):
         pass
@@ -96,6 +116,9 @@ class Object(UpdateableObject):
 
     def set(self, key: str, value: Any, update: bool = False):
         setattr(self, key, value)
+
+    def cast(self, cls: type[T]) -> Optional[T]:
+        return self if isinstance(self, cls) else None
 
     def __init_subclass__(cls, interface: bool = None, **kwargs):
         super().__init_subclass__(**kwargs)

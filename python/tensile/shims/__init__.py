@@ -6,7 +6,7 @@ if TYPE_CHECKING:
     from .mlx import core, types
 
 else:
-    default_shim_name: str = environ.get('TENSILE', 'mlx')
+    default_shim_name: str = environ.get('TENSILE', 'mlx').lower().strip()
 
     if default_shim_name == 'numpy':
         from .numpy import core, types

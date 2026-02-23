@@ -207,5 +207,13 @@ def is_monotonic(vals: TorchArray, strict: bool = False) -> bool:
     return (is_monotonic_test(vals, torch.less if strict else torch.less_equal) or
             is_monotonic_test(vals, torch.greater if strict else torch.greater_equal))
 
+
+def default_device():
+    return None
+
+
+def new_stream(device) -> Stream:
+    return None
+
 from . import functional, random
 

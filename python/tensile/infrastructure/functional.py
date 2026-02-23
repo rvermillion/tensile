@@ -185,7 +185,10 @@ def transform_coercer(transform: Transform[Any, Y], desc: str = '') -> Coercer[A
     return name_function(coerce, desc)
 
 
-def name_initter(name: str, aliases: tuple[str, ...] = None, /, writer: Setter = None, default: Any = None, required: bool = False) -> Initter[Any]:
+def name_initter(name: str, aliases: tuple[str, ...] = None, /, writer: Setter = None,
+                 default: Any = None,
+                 default_factory: Callable[[], Any] = None,
+                 required: bool = False) -> Initter[Any]:
     if writer is None:
         writer = attr_setter(name)
 
@@ -201,6 +204,19 @@ def name_initter(name: str, aliases: tuple[str, ...] = None, /, writer: Setter =
                             break
                     else:
                         raise ValueError(f'{name} (or {", ".join(aliases)}) is required!')
+
+                writer(this, value)
+        elif default_factory is not None:
+            def init(this: Any, spec: Spec):
+                value = spec.get(name, missing)
+
+                if value is missing:
+                    for alias in aliases:
+                        value = spec.get(alias, missing)
+                        if value is not missing:
+                            break
+                    else:
+                        value = default_factory()
 
                 writer(this, value)
         else:
@@ -223,6 +239,14 @@ def name_initter(name: str, aliases: tuple[str, ...] = None, /, writer: Setter =
                 if value is missing:
                     raise ValueError(f'{name} is required!')
                 writer(this, value)
+        elif default_factory is not None:
+            def init(this: Any, spec: Spec):
+                value = spec.get(name, missing)
+                try:
+                    if value is missing: value = default_factory()
+                    writer(this, value)
+                except Exception as e:
+                    raise AttributeError(f'Error initializing field [{name}] with: {value}') from e
         else:
             def init(this: Any, spec: Spec):
                 value = spec.get(name, default)
@@ -248,9 +272,15 @@ def coerce_int(this: Any, val: Any) -> int:
     return int(val)
 
 
+# noinspection PyUnusedLocal
+def coerce_float(this: Any, val: Any) -> float:
+    return float(val)
+
+
 type_coercers: dict[type, Coercer] = {
     str: coerce_str,
     int: coerce_int,
+    float: coerce_float,
 }
 
 
@@ -301,7 +331,7 @@ def coerce_type(cls: Optional[type[X]], optional: bool = False, generate: bool =
                 def coerce(this: Any, val: Any) -> X:
                     if isinstance(val, cls):
                         return val
-                    raise CoerceError(f'Cannot coerce {val} to {cls}')
+                    raise CoerceError(f'Cannot coerce {val!r} to {cls}')
             else:
                 log.debug('Skipping non-runtime class:', cls)
         return coerce_optional(coerce) if optional else coerce

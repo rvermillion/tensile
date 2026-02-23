@@ -39,3 +39,7 @@ def uniform(low: ArrayLike = 0.0, high: ArrayLike = 1.0, shape: ShapeLike = ...)
 
 def permutation(size: int, **kwargs) -> Array:
     return torch.randperm(size)
+
+# noinspection PyShadowingNames
+def seed(seed: int) -> None:
+    torch.manual_seed(seed)
