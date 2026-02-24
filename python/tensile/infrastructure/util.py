@@ -8,7 +8,7 @@ special_class_names: dict[type, str] = {}
 special_class_qnames: dict[type, str] = {}
 
 
-def add_special_class_name(cls: type, name: str, qname: str = None, override: bool = False):
+def register_special_class_name(cls: type, name: str, qname: str = None, override: bool = False):
     if qname is None:
         qname = name
     if not override:
@@ -20,12 +20,12 @@ def add_special_class_name(cls: type, name: str, qname: str = None, override: bo
     special_class_qnames[cls] = qname
 
 
-def add_special_class_names(names: dict[type, str], qnames: dict[type, str] = None, override: bool = False):
+def register_special_class_names(names: dict[type, str], qnames: dict[type, str] = None, override: bool = False):
     for cls, name in names.items():
-        add_special_class_name(cls, name, qname=None if qnames is None else qnames.get(cls), override=override)
+        register_special_class_name(cls, name, qname=None if qnames is None else qnames.get(cls), override=override)
 
 
-add_special_class_names({
+register_special_class_names({
     str: 'str',
     bool: 'bool',
     int: 'int',

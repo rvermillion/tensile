@@ -1,7 +1,7 @@
 #  Copyright (c) 2025. Richard Vermillion. All Rights Reserved.
 from . import log
 from .types import *
-from .util import name_function
+from .util import class_qname, name_function
 
 class MetaError(RuntimeError):
 
@@ -46,7 +46,7 @@ def safe_getter(getter: Getter, error: str, desc: str = '') -> Getter:
         try:
             return getter(this)
         except AttributeError as e:
-            print(error)
+            log.error(error, e)
             raise e
             # raise MetaError(error) from e
     if not desc:
@@ -277,12 +277,33 @@ def coerce_float(this: Any, val: Any) -> float:
     return float(val)
 
 
-type_coercers: dict[type, Coercer] = {
+type_coercers: dict[type, Coercer] = {}
+
+qname_coercers: dict[str, Coercer] = {}
+
+def register_type_coercer(coerce: Coercer, cls: type = None, qname: str = None) -> None:
+    if cls is not None:
+        type_coercers[cls] = coerce
+        if qname is None: qname = class_qname(cls)
+    if qname is not None:
+        qname_coercers[qname] = coerce
+        if qname.startswith('builtins.'):
+            qname_coercers[qname[9:]] = coerce
+
+def register_type_coercers(coercers: dict[str|type, Coercer]) -> None:
+    for key, coerce in coercers.items():
+        if isinstance(key, type):
+            register_type_coercer(coerce, cls=key)
+        elif isinstance(key, str):
+            register_type_coercer(coerce, qname=key)
+        else:
+            raise TypeError(f'Invalid key type {type(key)} for coercer registration')
+
+register_type_coercers({
     str: coerce_str,
     int: coerce_int,
     float: coerce_float,
-}
-
+})
 
 class CoerceError(TypeError):
 
@@ -322,19 +343,28 @@ def coerce_conditional(coerce: Coercer[X, Y], condition: Callable[[Any], bool], 
     return name_function(coerce_if, f'coerce_conditional[{coerce}, condition={condition}]')
 
 
-def coerce_type(cls: Optional[type[X]], optional: bool = False, generate: bool = False) -> Optional[Coercer[Any, X]]:
+def coerce_type(cls: Optional[type[X]], optional: bool = False, qname: str = None, generate: bool = False) -> Optional[Coercer[Any, X]]:
     if isinstance(cls, type):
         coerce = type_coercers.get(cls)
         if coerce is None:
+            coerce = type_coercers.get(qname)
+        if coerce is None:
             if is_runtime_class(cls):
-                # noinspection PyUnusedLocal
-                def coerce(this: Any, val: Any) -> X:
-                    if isinstance(val, cls):
-                        return val
-                    raise CoerceError(f'Cannot coerce {val!r} to {cls}')
+                if getattr(cls, 'auto_coerce', False):
+                    coerce = getattr(cls, 'coerce', None)
+                    if coerce is None:
+                        coerce = getattr(cls, '_coerce', None)
+                if coerce is None:
+                    # noinspection PyUnusedLocal
+                    def coerce(this: Any, val: Any) -> X:
+                        if isinstance(val, cls):
+                            return val
+                        raise CoerceError(f'Cannot coerce {val!r} to {cls}')
+                else:
+                    log.warn('Using class method {} for coercion of {}', coerce, cls)
             else:
                 log.debug('Skipping non-runtime class:', cls)
-        return coerce_optional(coerce) if optional else coerce
     else:
-        return None
+        coerce = None
+    return None if coerce is None else coerce_optional(coerce) if optional else coerce
 

@@ -84,7 +84,7 @@ from mlx.core import (
     ones, ones_like,
     full,
     eye, trace,
-    arange, concatenate, reshape,
+    arange, concatenate, reshape, repeat,
     abs, square, sqrt, exp, log, expm1,
     sum, max, min, mean, std, var, logsumexp, prod,
     cumsum, cumprod, cummax, cummin,
@@ -93,7 +93,7 @@ from mlx.core import (
     isinf, isnan,
     matmul,
     minimum, maximum, clip,
-    argmin, argmax,
+    argmin, argmax, argpartition, argsort,
     floor, floor_divide,
     sort, where,
     eval, async_eval,
@@ -104,7 +104,6 @@ from mlx.core import (
     inf,
     all, any,
     allclose,
-    argsort,
     stack, array_equal,
     equal,
     stream, new_stream, default_stream,
@@ -115,7 +114,7 @@ from mlx.core import (
     device_info, default_device,
     synchronize,
     metal,
-    quantize, quantized_matmul,
+    quantize, quantized_matmul, dequantize,
 )
 
 clear_cache = metal.clear_cache
@@ -170,6 +169,9 @@ def fromfunction(function, shape, *, dtype=float, like=None, **kwargs) -> Array:
 
 def broadcast_shapes(a: ArrayLike, b: ArrayLike) -> Shape:
     return mx.broadcast_to(mx.array(a), b.shape).shape
+
+def norm(a: ArrayLike, axis: Axes = None, dtype: DType = None, keepdims: bool = False, **kwargs) -> Array:
+    return sqrt(sum(square(a), axis=axis, keepdims=keepdims))
 
 def median(a: ArrayLike, axis: Axes = ..., dtype: DType = ..., keepdims: bool = ..., **kwargs) -> Array:
     raise NotImplementedError()

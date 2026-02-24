@@ -11,13 +11,14 @@ cached_field_types: dict[Any, 'FieldType'] = {}
 
 class FieldType(RootObject):
 
-    __slots__ = ['anno', 'cls', 'qname', 'args', 'optional']
+    __slots__ = ['anno', 'cls', 'qname', 'args', 'optional', 'coerce']
 
     anno: Any
     cls: Optional[type]
     qname: str
     args: tuple['FieldType', ...]
     optional: bool
+    coerce: Optional[Coercer]
 
     def __init__(self, anno: Any, cls: type = None, qname: str = None, args: tuple['FieldType', ...] = (),
                  optional: bool = False):
@@ -38,6 +39,7 @@ class FieldType(RootObject):
         self.qname = qname
         self.args = args
         self.optional = optional
+        self.coerce = None
 
         if not isinstance(anno, str) or '.' in anno:
             # print(f'// caching field type for {anno!r}')
@@ -64,9 +66,18 @@ class FieldType(RootObject):
         cls = self.cls
         return cls if cls is not None and issubclass(cls, sup) else None
 
-    @property
-    def coerce(self) -> Optional[Coercer]:
-        return coerce_type(self.cls, optional=self.optional)
+    def get_coerce(self) -> Optional[Coercer]:
+        if self.coerce is None:
+            if cls := self.cls:
+                # noinspection PyTypeChecker
+                coerce = coerce_type(cls, optional=self.optional)
+            else:
+                coerce = None
+            if coerce is None:
+                self.debug('no coerce method for {!r}', self)
+            else:
+                self.coerce = coerce
+        return self.coerce
 
     @property
     def equiv(self) -> Equiv:
@@ -118,17 +129,13 @@ class FieldType(RootObject):
         if self.is_sequence:
             spec['sequence'] = True
 
-    def _repr_type(self) -> str:
+    def _repr_type(self, **options) -> str:
         return 'FieldType'
 
-    def _repr_args(self) -> str:
+    def _repr_args(self, **options) -> str:
         s = str(self)
-        # if self.is_multivalued:
-        #     s += ', +multivalued'
-        # if self.is_unique:
-        #     s += ', +unique'
-        # if self.is_sequence:
-        #     s += ', +sequence'
+        if self.cls is None:
+            return s + ', +deferred'
         return s
 
     # noinspection PyMethodMayBeStatic
@@ -265,8 +272,7 @@ class UnionFieldType(FieldType):
         qname = 'Union[' + ', '.join(arg.qname for arg in args) + ']'
         super().__init__(anno, cls, qname, args, optional)
 
-    @property
-    def coerce(self) -> Optional[Coercer]:
+    def get_coerce(self) -> Optional[Coercer]:
         return None
 
     def __str__(self) -> str:

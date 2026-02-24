@@ -71,7 +71,7 @@ class Base(Logging, Representable):
     def _validate(self) -> None:
         pass
 
-    def _repr_type(self, short: bool = False) -> str:
+    def _repr_type(self, short: bool = False, **options) -> str:
         return self.__class__.__name__
 
     def _repr_arg(self, short: bool = False) -> str:

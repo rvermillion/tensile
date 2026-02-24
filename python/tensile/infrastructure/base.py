@@ -165,13 +165,14 @@ class Object(UpdateableObject):
             # factory = cls.meta.get_factory(from_type='type')
             return cls._coerce_from_type(spec, **kwargs)
         elif callable(spec):
-            factory = cls.meta.get_factory(from_type='callable')
             return cls._coerce_from_callable(spec, **kwargs)
 
         # if factory:
         #     # noinspection PyCallingNonCallable
         #     return factory(spec, **kwargs)
         raise ValueError(f'Cannot coerce {spec} to {cls}')
+
+    auto_coerce: ClassVar[Annotated[bool, field(ignore=True)]] = False
 
     @classmethod
     def xcoerce(cls, spec: Any = None, /, **kwargs) -> Self:
@@ -229,6 +230,8 @@ class Object(UpdateableObject):
 
     @classmethod
     def _coerce_from_callable(cls, spec: Callable, /, **kwargs):
+        if factory := cls.meta.get_factory(from_type='callable'):
+            return factory(spec, **kwargs)
         raise TypeError(f'Cannot coerce a function {spec} to {cls}')
 
     Meta: ClassVar[type[ObjectMeta]] = ObjectMeta

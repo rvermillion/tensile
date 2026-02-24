@@ -8,6 +8,10 @@ from .field import FieldType
 from .util import class_qname, process_specs
 
 
+if TYPE_CHECKING:
+    import tensile.infrastructure
+
+
 class MetaError(RuntimeError):
 
     pass
@@ -131,6 +135,7 @@ if TYPE_CHECKING:
         init: Optional[bool] = ...,
         doc: str = ...,
         inherit: str|bool = ...,
+        ignore: bool = ...,
         **kwargs
     ) -> Keywords: ...
 else:
@@ -447,6 +452,7 @@ field_attr_defaults: dict[str, Any] = {
     'doc': '',
     'default': None,
     'default_factory': None,
+    'delegate': None,
     'member': missing,
     'required': False,
     'readonly': False,
@@ -500,9 +506,16 @@ def build_coerce(name: str = None, check_cls: type = None, field_type: FieldType
         return method_coercer(method=coerce_method)
     elif callable(getattr(check_cls, coerce_method, None)):
         return method_coercer(method=coerce_method)
+    else:
+        coerce_method = f'_{name}_coerce'
+        if callable(getattr(check_cls, coerce_method, None)):
+            return method_coercer(method=coerce_method)
     if field_type is not None:
-        coerce = field_type.coerce
-        if coerce is not None and required is False and not field_type.optional:
+        coerce = field_type.get_coerce()
+        if coerce is None:
+            # log.warn('no coerce method for field [{}] of type {!r}', name, field_type)
+            return None
+        elif required is False and not field_type.optional:
             def coerce_maybe(this, val):
                 return None if val is None else coerce(this, val)
             return coerce_maybe
@@ -606,7 +619,7 @@ class Field(RootObject):
                  'peek', 'lazy', 'get', 'poke', 'coerce', 'write',
                  'set', 'delete', 'init', 'is_set', 'update',
                  'default', 'default_factory', 'required', 'readonly',
-                 'doc', 'scope', 'member', 'visibility']
+                 'doc', 'scope', 'member', 'visibility', 'delegate']
 
     owner: 'Meta'
     name: str
@@ -625,6 +638,7 @@ class Field(RootObject):
     update: Setter
     delete: Optional[Deleter]
     init: Optional[Initter]
+    delegate: Optional[str]
     doc: str
     member: Any
     default: Any
@@ -663,12 +677,22 @@ class Field(RootObject):
     def equiv(self) -> Equiv:
         return self.type.equiv
 
+    def has_methods(self, *methods) -> bool:
+        cls = self.owner.cls
+        for pfx in methods:
+            method = f'_{pfx}_{self.name}'
+            if callable(getattr(cls, method, None)):
+                return True
+        return False
+
     def needs_property(self) -> bool:
         if isinstance(self.member, property):
             return False
         if self.coerce or self.lazy:
             return True
         if self.slot is not None:
+            return True
+        if self.has_methods('get', 'set'):
             return True
         return False
 
@@ -716,12 +740,24 @@ class Field(RootObject):
     def build_get(self, spec: Spec) -> Getter:
         if isinstance(self.member, property):
             return self.member.fget
-        getter = build_getter(peek=self.peek, lazy=self.lazy, poke=self.poke)
+        getter_method = f'_get_{self.name}'
+        if getattr(self.owner.cls, getter_method, None):
+            return method_getter(method=getter_method)
+        if delegate := self.delegate:
+            name = self.name
+            dot = delegate.find('.')
+            if dot >= 0:
+                delegate, name = delegate[:dot], delegate[dot + 1:]
+            def getter(this: Any):
+                getattr(getattr(this, delegate), name)
+            return getter
+        lazy = self.lazy
+        getter = build_getter(peek=self.peek, lazy=lazy, poke=self.poke)
         if getter is None:
             def getter(this: Any) -> Any:
                 raise AttributeError(f'Field {self.qname} of {this} has no getter')
-        else:
-            getter = safe_getter(getter, f'Error getting field [{self.qname}]')
+        # elif lazy:
+        #     getter = safe_getter(getter, f'Error getting field [{self.qname}]')
         return getter
 
     def build_is_set(self, spec: Spec) -> IsSetter:
@@ -752,6 +788,19 @@ class Field(RootObject):
     def build_write(self, spec: Spec) -> Optional[Setter]:
         if isinstance(self.member, property):
             return self.member.fset
+
+        setter_method = f'_set_{self.name}'
+        if getattr(self.owner.cls, setter_method, None):
+            return method_setter(method=setter_method)
+
+        if delegate := self.delegate:
+            name = self.name
+            dot = delegate.find('.')
+            if dot >= 0:
+                delegate, name = delegate[:dot], delegate[dot + 1:]
+            def setter(this: Any, value: Any):
+                setattr(getattr(this, delegate), name, value)
+            return setter
         if Scope.is_instance(self.scope):
             setter = build_setter(poke=self.poke, coerce=self.coerce, desc=self.qname)
             # if setter is None:
@@ -866,7 +915,7 @@ kind_prefix = 'kind:'
 from_prefix = 'from:'
 
 
-def factory_key(*, key: str = None, kind: str = None, from_type: str = None, default_kind: str = None):
+def factory_key(*, key: str = None, kind: str = None, from_type: str|type = None, default_kind: str = None):
     if key is None:
         if from_type is None:
             if kind is None:
@@ -877,7 +926,11 @@ def factory_key(*, key: str = None, kind: str = None, from_type: str = None, def
             else:
                 key = kind_prefix + kind
         else:
-            key = from_prefix + from_type
+            if isinstance(from_type, type):
+                from_type = class_qname(from_type)
+                if from_type.startswith('builtins.'):
+                    from_type = from_type[9:]
+            key = from_prefix + from_type.replace('.', '_')
     return key
 
 
@@ -956,7 +1009,7 @@ class Registry(RootObject, Generic[T]):
 
             self.put_factory(singleton_factory, key=key)
 
-    def get_factory(self, *, key: str = None, kind: str = None, from_type: str = None) -> Optional[Factory[T]]:
+    def get_factory(self, *, key: str = None, kind: str = None, from_type: str|type = None) -> Optional[Factory[T]]:
         key = factory_key(key=key, kind=kind, from_type=from_type, default_kind=self.default_kind)
         factory = self.peek_factory(key)
 
@@ -972,8 +1025,11 @@ class Registry(RootObject, Generic[T]):
 
             if factory is not None:
                 self.factories[key] = factory
+            elif from_type and isinstance(from_type, type):
+                log.debug('No factory for {} with key {} and from_type {}',
+                          class_qname(self.ifc), key, from_type)
             else:
-                print('No factory!')
+                log.debug('No factory for {} with key {}', class_qname(self.ifc), key)
         return factory
 
     def _repr_args(self) -> str:
@@ -986,7 +1042,7 @@ class Registry(RootObject, Generic[T]):
             return getattr(ifc, fallback_method, None)
         elif key.startswith('kind:') and reg:
             return reg.fallback_factory(key)
-        elif key == 'default' or key == 'kind:default':
+        elif key == 'kind:default' or key == 'default':
             return getattr(ifc, 'provide_from', ifc)
         return None
 
@@ -1137,7 +1193,7 @@ class Meta(UpdateableObject):
     #     registry = self.get_registry()
     #     registry.put_factory(factory, key=key, kind=kind, from_type=from_type, override=override)
 
-    def get_factory(self, *, key: str = None, kind: str = None, from_type: str = None) -> Optional[Factory[Any]]:
+    def get_factory(self, *, key: str = None, kind: str = None, from_type: str|type = None) -> Optional[Factory[Any]]:
         registry = self.registry
         if registry is None:
             # noinspection PyTypeChecker
@@ -1160,14 +1216,23 @@ class Meta(UpdateableObject):
         factory = None
         kind = None
         if spec is None or isinstance(spec, Mapping):
-            kind, spec = process_specs(spec, **kwargs)
+            kind, new_spec = process_specs(spec, **kwargs)
             # if kind is None:
             #     kind = 'default'
                 # return cls.create(spec)
-            factory = self.get_factory(kind=kind)
-            if callable(factory):
-                return factory(spec)
-            raise TypeError(f'{cls}: cannot coerce {spec} to {cls} because no factory is registered for kind [{kind}]')
+            if kind is not None:
+                factory = self.get_factory(kind=kind)
+                if factory:
+                    return factory(new_spec)
+            factory = self.get_factory(from_type='mapping')
+            if factory is None:
+                if spec is None or isinstance(spec, dict):
+                    factory = self.get_factory(from_type='dict')
+            if factory:
+                new_spec = kwargs
+                if spec is not None: new_spec.update(spec)
+                return factory(new_spec)
+            raise TypeError(f'{cls}: cannot coerce {spec} with kwargs {kwargs} because no factory is registered for kind [{kind}]')
         elif isinstance(spec, str):
             factory = self.get_factory(from_type='str')
         elif isinstance(spec, Sequence):
@@ -1182,6 +1247,16 @@ class Meta(UpdateableObject):
         if factory:
             # noinspection PyCallingNonCallable
             return factory(spec, **kwargs)
+        elif spec:
+            spec_cls = type(spec)
+            factory = self.get_factory(from_type=spec_cls)
+            if factory is None:
+                for sup_cls in spec_cls.mro()[1:]:
+                    self.warn('looking for factory of {} from spec superclass {}', cls, sup_cls)
+                    factory = self.get_factory(from_type=sup_cls)
+                    if factory: break
+
+            if factory: return factory(spec, **kwargs)
         raise ValueError(f'Cannot coerce {spec} of kind [{kind}] to {cls}')
 
     def spread_spec(self, factory: Factory[T]) -> Factory[T]:
@@ -1195,6 +1270,29 @@ class Meta(UpdateableObject):
 
         # noinspection PyTypeChecker
         return spread
+
+    def provide_from_type(self, *types: Union[type, str], spread: bool = False) -> Callable[[T], T]:
+        reg = self.get_registry()
+
+        types = tuple(class_qname(t) if isinstance(t, type) else t for t in types)
+
+        def decorator(sub: T) -> T:
+            if isinstance(sub, type):
+                factory = getattr(sub, 'provide_from', sub)
+            elif callable(sub):
+                if spread:
+                    factory = self.spread_spec(sub)
+                else:
+                    factory = sub
+            else:
+                raise ValueError('Ooops!')
+
+            for t in types:
+                reg.debug('register({}): register from type [{}] as {}',
+                          class_qname(self.cls), t, class_qname(factory))
+                reg.put_factory(factory, from_type=t)
+            return sub
+        return decorator
 
     def provide(self, *kinds, spread: bool = False) -> Callable[[T], T]:
         reg = self.get_registry()
@@ -1290,13 +1388,13 @@ class ObjectMeta(Meta):
 
     __slots__ = ['fields', 'own_fields', 'field_inits', 'slots']
 
-    cls: type
+    cls: type['tensile.infrastructure.Object']
     fields: dict[str, Field]
     own_fields: dict[str, Field]
     field_inits: tuple[Initter, ...]
     slots: set[str]
 
-    def __init__(self, cls: type, **kwargs):
+    def __init__(self, cls: type['tensile.infrastructure.Object'], **kwargs):
         Meta.__init__(self, cls, **kwargs)
 
         cls.meta = self
@@ -1379,6 +1477,9 @@ class ObjectMeta(Meta):
                         elif isinstance(anno_arg, Field):
                             anno_arg.to_spec(field_spec)
 
+                if field_spec.get('ignore', False):
+                    continue
+
                 field_spec['type'] = FieldType.from_anno(anno, cls)
 
                 if name[0] == '_':
@@ -1453,6 +1554,14 @@ class ObjectMeta(Meta):
     def _repr_args(self) -> str:
         return self.qname
 
+    def coerce(self, spec: Any = None, /, **kwargs) -> Self:
+        if self.has_instance(spec):
+            return spec
+
+        cls = self.cls
+
+        return cls.coerce(spec, **kwargs)
+
     @classmethod
     def engineer(cls, impl: type, **kwargs) -> None:
         meta = meta_by_type.get(impl)
@@ -1479,7 +1588,12 @@ def provides(cls: type, *kinds, spread: bool = False) -> Callable[[T], T]:
     return meta.provide(*kinds, spread=spread)
 
 
-def coerce(cls: type[T], spec: Mapping[str, Any] = None, /, **kwargs) -> T:
+def provides_from_type(cls: type, *types, spread: bool = False) -> Callable[[T], T]:
+    meta = Meta.for_class(cls, build=True)
+    return meta.provide_from_type(*types, spread=spread)
+
+
+def coerce(cls: type[T], spec: Any = None, /, **kwargs) -> T:
     try:
         meta = Meta.for_class(cls, build=True)
         return meta.coerce(spec, **kwargs)
