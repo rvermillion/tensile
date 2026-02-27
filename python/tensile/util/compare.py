@@ -67,7 +67,7 @@ class Comparison(Object):
             }
         return None
 
-    def compare_any(self, left: Any, right: Any, path: str) -> CompareResult:
+    def compare_any(self, left: Any, right: Any, path: str, key_prefix: str = '.') -> CompareResult:
         if left is None:
             if right is None:
                 return None
@@ -78,7 +78,7 @@ class Comparison(Object):
             return self.compare_tensors(left, right, path)
         elif type(left) == type(right):
             if isinstance(left, dict):
-                return self.compare_dict(left, right, path)
+                return self.compare_dict(left, right, path, key_prefix=key_prefix)
             elif isinstance(left, list):
                 return self.compare_list(left, right, path)
             elif isinstance(left, float):
@@ -88,14 +88,14 @@ class Comparison(Object):
             return None
         return f"{self.lname} is not equal to {self.rname}: {left} != {right}"
 
-    def compare_dict(self, left: dict[str, Any], right: dict[str, Any], path: str) -> CompareResult:
+    def compare_dict(self, left: dict[str, Any], right: dict[str, Any], path: str, key_prefix: str = '.') -> CompareResult:
         out = {}
         if left or right:
             keys = sorted(left.keys() | right.keys())
             for k in keys:
                 if self.ignore_key(k):
                     continue
-                kpath = f'{path}.{k}'
+                kpath = f'{path}{key_prefix}{k}'
                 if self.ignore_path(kpath):
                     continue
                 if k in left:
@@ -103,9 +103,9 @@ class Comparison(Object):
                         if r := self.compare_any(left[k], right[k], kpath):
                             out[k] = r
                     else:
-                        out[k] = f'{kpath}: missing in {self.lname}'
+                        out[k] = f'{kpath}: missing in {self.rname}'
                 else:
-                    out[k] = f'{kpath}: missing in {self.rname}'
+                    out[k] = f'{kpath}: missing in {self.lname}'
         return out
 
     def compare_list(self, left: list[Any], right: list[Any], path: str) -> CompareResult:
@@ -146,14 +146,16 @@ class Comparison(Object):
         if suffix == '.safetensors':
             larrays = ten.load_tensors(str(left))
             rarrays = ten.load_tensors(str(right))
-            return self.compare_dict(larrays, rarrays, path)
+            if r := self.compare_dict(larrays, rarrays, path, key_prefix='/'):
+                return r
+            return None
         elif suffix == '.json':
             try:
                 ljson = json.loads(left.read_text())
                 rjson = json.loads(right.read_text())
             except Exception as e:
                 return f'error: {e}'
-            return self.compare_any(ljson, rjson, path)
+            return self.compare_any(ljson, rjson, path, key_prefix='/')
         return f'{path}: unknown suffix: {suffix}'
 
     def compare_path(self, left: Path, right: Path, path: str) -> CompareResult:

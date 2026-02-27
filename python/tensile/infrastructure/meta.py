@@ -506,6 +506,10 @@ class ObjectMeta(Meta):
                 value = cls.__dict__.get(name, ...)
                 if value is not ...:
                     field_spec['member'] = value
+                else:
+                    value = getattr(cls, name, ...)
+                    if value is not ... and isinstance(value, MemberDescriptorType):
+                        field_spec['member'] = value
 
                 slot = f'_{name}'
                 if self.has_slot(slot):
