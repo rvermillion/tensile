@@ -1,4 +1,6 @@
 #  Copyright (c) 2025. Richard Vermillion. All Rights Reserved.
+from pathlib import Path
+
 from . import log
 from .types import *
 from .util import class_qname, name_function
@@ -12,12 +14,68 @@ is_equiv: Equiv
 eq_equiv: Equiv
 
 
+none: Transform[Any, None]
+
+
+def constant(x: X) -> Transform[Any, X]:
+    return name_function(lambda x: x, name=f'constant({x!r})')
+
+
+def identity(x: T) -> T:
+    return x
+
+
+def none(x: Any) -> None:
+    return None
+
+
+def chunk(seq: Sequence[T], chunk_size: int) -> Iterable[Sequence[T]]:
+    cnt = len(seq)
+    s = 0
+    e = chunk_size
+    while e < cnt:
+        yield seq[s:e]
+        s = e
+        e += chunk_size
+    yield seq[s:]
+
+
+def compose(fns: Sequence[Callable[[T], T]]) -> Callable[[T], T]:
+    if fns:
+        fns = [fn for fn in fns if fn is not identity and fn is not None]
+        if fns:
+            cnt = len(fns)
+            if cnt == 1:
+                return fns[0]
+            elif cnt == 2:
+                a, b = fns
+                def composed(arg: T) -> T:
+                    return b(a(arg))
+            elif cnt == 3:
+                a, b, c = fns
+                def composed(arg: T) -> T:
+                    return c(b(a(arg)))
+            elif cnt == 4:
+                a, b, c, d = fns
+                def composed(arg: T) -> T:
+                    return d(c(b(a(arg))))
+            else:
+                return compose([compose(f) for f in chunk(fns, min(4, (cnt+3)//4))])
+            return name_function(composed, name=f'compose({", ".join(fn.__name__ for fn in fns)})')
+    return identity
+
+
+
 def is_equiv(a: Any, b: Any) -> bool:
     return a is b
 
 
 def eq_equiv(a: Any, b: Any) -> bool:
     return a == b
+
+
+def none_getter(this: Any) -> None:
+    return None
 
 
 def constant_getter(const: X, desc: str = '') -> Getter[Any, X]:
@@ -164,12 +222,35 @@ def method_one_caller(method: str, *args, pass_instance: bool = False, desc: str
     return name_function(call_method, desc)
 
 
+def method_many_caller(method: str, *add_args, pass_instance: bool = False, desc: str = '') -> Callable[[Any, Any], Any]:
+    if add_args:
+        if pass_instance:
+            def call_method(this: Any, *args: Any) -> None:
+                return getattr(this, method)(this, *args, *add_args)
+        else:
+            def call_method(this: Any, *args: Any) -> None:
+                return getattr(this, method)(*args, *add_args)
+    elif pass_instance:
+        def call_method(this: Any, *args: Any) -> None:
+            return getattr(this, method)(this, *args)
+    else:
+        def call_method(this: Any, *args: Any) -> None:
+            return getattr(this, method)(*args)
+    if not desc:
+        desc = f'dynamic_call[{method}]'
+    return name_function(call_method, desc)
+
+
 def method_getter(method: str, *args, pass_instance: bool = False, desc: str = '') -> Getter:
     return method_zero_caller(method, *args, pass_instance=pass_instance, desc=desc)
 
 
 def method_setter(method: str, *args, pass_instance: bool = False, desc: str = '') -> Setter:
     return method_one_caller(method, *args, pass_instance=pass_instance, desc=desc)
+
+
+def method_changed(method: str, *args, pass_instance: bool = False, desc: str = '') -> Setter:
+    return method_many_caller(method, *args, pass_instance=pass_instance, desc=desc)
 
 
 def method_coercer(method: str, *args, pass_instance: bool = False, desc: str = '') -> Coercer:
@@ -277,6 +358,11 @@ def coerce_float(this: Any, val: Any) -> float:
     return float(val)
 
 
+# noinspection PyUnusedLocal
+def coerce_path(this: Any, val: Any) -> Path:
+    return Path(val)
+
+
 type_coercers: dict[type, Coercer] = {}
 
 qname_coercers: dict[str, Coercer] = {}
@@ -303,6 +389,7 @@ register_type_coercers({
     str: coerce_str,
     int: coerce_int,
     float: coerce_float,
+    Path: coerce_path,
 })
 
 class CoerceError(TypeError):
@@ -343,14 +430,14 @@ def coerce_conditional(coerce: Coercer[X, Y], condition: Callable[[Any], bool], 
     return name_function(coerce_if, f'coerce_conditional[{coerce}, condition={condition}]')
 
 
-def coerce_type(cls: Optional[type[X]], optional: bool = False, qname: str = None, generate: bool = False) -> Optional[Coercer[Any, X]]:
+def coerce_type(cls: Optional[type[X]], optional: bool = False, qname: str = None, auto: bool = None, generate: bool = False) -> Optional[Coercer[Any, X]]:
     if isinstance(cls, type):
         coerce = type_coercers.get(cls)
         if coerce is None:
-            coerce = type_coercers.get(qname)
+            coerce = qname_coercers.get(qname)
         if coerce is None:
             if is_runtime_class(cls):
-                if getattr(cls, 'auto_coerce', False):
+                if getattr(cls, 'auto_coerce', False) if auto is None else auto:
                     coerce = getattr(cls, 'coerce', None)
                     if coerce is None:
                         coerce = getattr(cls, '_coerce', None)
@@ -361,10 +448,26 @@ def coerce_type(cls: Optional[type[X]], optional: bool = False, qname: str = Non
                             return val
                         raise CoerceError(f'Cannot coerce {val!r} to {cls}')
                 else:
-                    log.warn('Using class method {} for coercion of {}', coerce, cls)
+                    log.warn('Using class method {} for automatic coercion of {}', coerce, cls)
+                    def auto_coerce(this: Any, val: Any) -> X:
+                        # noinspection PyCallingNonCallable
+                        return coerce(val)
+                    return auto_coerce
             else:
                 log.debug('Skipping non-runtime class:', cls)
     else:
         coerce = None
     return None if coerce is None else coerce_optional(coerce) if optional else coerce
 
+
+def pick_arg(fn: Callable[..., T], arg: int = 0) -> Callable[..., T]:
+    def picked(*args, **kwargs) -> T:
+        return fn(args[arg], **kwargs)
+    return picked
+
+
+def slice_args(fn: Callable[..., T], start: int = 0, stop: int = None) -> Callable[..., T]:
+    s = slice(start, stop)
+    def sliced(*args, **kwargs) -> T:
+        return fn(*args[s], **kwargs)
+    return sliced

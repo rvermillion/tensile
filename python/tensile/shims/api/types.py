@@ -2,12 +2,12 @@
 from typing import Iterator, Protocol, Sequence, TypeAlias, Union
 from ..common.types import *
 
-AxisSelector: TypeAlias = Union[int, slice, 'Array', Ellipsis, None]
-Selector: TypeAlias = MaybeTuple[AxisSelector]
-ArrayLike: TypeAlias = Union['Array', Scalar, Sequence['ArrayLike']]
-ArrayOrScalar: TypeAlias = Union['Array', S]
-ArrayOrT: TypeAlias = Union['Array', T, Sequence[T]]
-ArrayOrFloat: TypeAlias = ArrayOrT[float]
+AxisSelector = Union[int, slice, 'Array', Ellipsis, None]
+Selector = MaybeTuple[AxisSelector]
+ArrayLike = Union['Array', Scalar, Sequence['ArrayLike']]
+ArrayOrScalar = Union['Array', S]
+ArrayOrT = Union['Array', T, Sequence[T]]
+ArrayOrFloat = ArrayOrT[float]
 
 
 class DType(Protocol):
@@ -16,7 +16,7 @@ class DType(Protocol):
     def name(self) -> str: ...
 
 
-DTypeLike: TypeAlias = Union[DType, str, type]
+DTypeLike = Union[DType, str, type]
 
 
 class Array(Protocol):

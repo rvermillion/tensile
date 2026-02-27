@@ -11,9 +11,7 @@
 # from .shims.mlx import core as ten
 # from .shims import torch as ten
 
-from .shims import core
-
-ten = core
+from .shims import ten
 
 Array = ten.Array
 ArrayLike = ten.ArrayLike

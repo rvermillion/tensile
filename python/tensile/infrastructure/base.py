@@ -1,7 +1,8 @@
 #  Copyright (c) 2025. Richard Vermillion. All Rights Reserved.
 import json
 
-from .meta import ObjectMeta, Meta, RootObject, Spec, UpdateableObject, field
+from .field import field
+from .meta import ObjectMeta, RootObject, Spec, UpdateableObject
 from .types import Annotated, Any, Callable, ClassVar, Keywords, Mapping, Optional, Self, Sequence, TypeVar
 from .util import process_specs
 

@@ -1,11 +1,16 @@
 #  Copyright (c) 2025. Richard Vermillion. All Rights Reserved.
+
 import builtins
+import sys
 from enum import Enum
-from types import (NoneType, GenericAlias, MemberDescriptorType)
-from typing import (AbstractSet, Annotated, Annotated, Any, Callable, ClassVar, Collection, ForwardRef, Iterable,
-                    Mapping, MutableSequence, Optional, Protocol, Self, Sequence, TYPE_CHECKING, TypeAlias, TypeVar,
+import types, typing
+from types import (NoneType, GenericAlias, MemberDescriptorType, UnionType)
+from typing import (AbstractSet, Annotated, Annotated, Any, Callable, ClassVar, Collection, ForwardRef, Generic,
+                    Iterable, Iterator,
+                    Mapping, MutableSequence, Optional, Protocol, Self, Sequence, TYPE_CHECKING, TypeVar,
                     Union, get_args, get_origin)
-from typing import _GenericAlias
+
+_sysver = sys.version_info[:2]
 
 C = TypeVar('C', bound=Callable)
 T = TypeVar('T')
@@ -14,19 +19,40 @@ X = TypeVar('X')
 Y = TypeVar('Y', covariant=True)
 
 
-Keywords: TypeAlias = dict[str, Any]
+Keywords = dict[str, Any]
 
-Getter: TypeAlias = Callable[[T], Y]
-Setter: TypeAlias = Callable[[T, X], None]
-Deleter: TypeAlias = Callable[[T], None]
-Coercer: TypeAlias = Callable[[T, Any], Y]
-Initter: TypeAlias = Callable[[T, 'Spec'], None]
+Getter = Callable[[T], Y]
+Setter = Callable[[T, X], None]
+Deleter = Callable[[T], None]
+Coercer = Callable[[T, Any], Y]
+Initter = Callable[[T, 'Spec'], None]
 
-Predicate: TypeAlias = Callable[[T], bool]
-Transform: TypeAlias = Callable[[U], X]
-IsSetter: TypeAlias = Callable[[T], bool]
+Predicate = Callable[[T], bool]
+Transform = Callable[[U], X]
+IsSetter = Callable[[T], bool]
 
-Equiv: TypeAlias = Callable[[X, X], bool]
+Equiv = Callable[[X, X], bool]
+
+
+class Scope(Enum):
+
+    instance_scope = 'instance'
+    class_scope = 'class'
+
+    @staticmethod
+    def is_instance(scope: 'Scope') -> bool:
+        return scope is Scope.instance_scope
+
+    @staticmethod
+    def is_class(scope: 'Scope') -> bool:
+        return scope is Scope.class_scope
+
+
+class Visibility(Enum):
+
+    public = 'public'
+    protected = 'protected'
+    private = 'private'
 
 
 class Missing:
@@ -36,6 +62,11 @@ class Missing:
 
 
 missing = Missing()
+
+
+class MetaError(RuntimeError):
+
+    pass
 
 
 class Spec(dict[str, Any]):
@@ -77,8 +108,16 @@ class Spec(dict[str, Any]):
         return 'Spec(' + self.show_keywords() + ')'
 
     @classmethod
-    def combine(cls, *specs: Optional[Keywords]) -> 'Spec':
+    def combine(cls, *specs: Optional[Keywords]) -> Self:
         return cls().merge(*specs)
+
+    @classmethod
+    def coerce(cls, arg: Any) -> Self:
+        if arg is None: return cls()
+        if isinstance(arg, cls): return arg
+        if isinstance(arg, Mapping): return cls(arg)
+        raise TypeError(f'Cannot coerce {arg!r} to Spec')
+
 
 
 def is_protocol(cls: type) -> bool:
@@ -93,8 +132,19 @@ def is_runtime_class(cls: Any) -> bool:
     return isinstance(cls, type) and (not is_protocol(cls) or is_runtime_protocol(cls))
 
 
-def is_generic_alias(obj: Any) -> bool:
-    return isinstance(obj, _GenericAlias)
+if _sysver >= (3, 10):
+    from typing import _GenericAlias
+
+    def is_generic_alias(obj: Any) -> bool:
+        return isinstance(obj, _GenericAlias)
+
+else:
+    def is_generic_alias(obj: Any) -> bool:
+        return False
+
+
+def is_union(obj: Any) -> bool:
+    return isinstance(obj, UnionType)
 
 
 def is_forward_ref(obj: Any) -> bool:

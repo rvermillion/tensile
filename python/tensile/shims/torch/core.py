@@ -6,8 +6,8 @@ import numpy as np
 
 from .types import *
 
-TorchArray: TypeAlias = torch.Tensor
-TorchDType: TypeAlias = torch.Type
+TorchArray = torch.Tensor
+TorchDType = torch.Type
 
 
 def to_shape(size: ShapeLike) -> Shape:
@@ -18,8 +18,8 @@ def is_tensor(obj: Any) -> TypeGuard[TorchArray]:
     return isinstance(obj, TorchArray)
 
 
-def tensor(a: ArrayLike) -> TorchArray:
-    return a if isinstance(a, TorchArray) else torch.tensor(a)
+def ensure(a: ArrayLike, *args, **kwargs) -> TorchArray:
+    return a if isinstance(a, TorchArray) else tensor(a, *args, **kwargs)
 
 
 class TorchGenerator:
@@ -73,15 +73,18 @@ def is_dtype(obj: Any) -> TypeGuard[DType]:
 def is_rng(obj: Any) -> TypeGuard[TorchGenerator]:
     return False
 
-def astype(a: Any, dtype: DType) -> Array:
-    return torch.tensor(a, dtype=dtype)
+def as_type(a: Any, dtype: DType) -> Array:
+    if is_array(a):
+        return a.to(dtype)
+    return tensor(a, dtype=dtype)
 
 from torch import (
-    tensor as array,
+    tensor,
     zeros, zeros_like, ones, ones_like, full, full_like, empty, empty_like,
     arange, concatenate, reshape,
-    abs, square, sqrt, exp, log, expm1,
+    abs, square, sqrt, exp, log, expm1, sin, cos, tan,
     median, std, var, quantile,
+    pi,
     addmm,
     isinf, isnan,
     matmul,
@@ -98,7 +101,11 @@ from torch import (
     stack,
     squeeze,
     equal, searchsorted,
+    get_default_device as default_device, set_default_device,
 )
+
+
+from torch.nn.parameter import Parameter
 
 ten_kind: str = 'torch'
 
@@ -106,6 +113,53 @@ Stream = None
 
 def eval(*args) -> None:
     pass
+
+debug_eval = eval
+
+# noinspection PyShadowingNames
+def array(data, *args, **kwargs) -> Array:
+    x = ensure(data, *args, **kwargs)
+    if x.device.type != 'mps':
+        print('Non-MPS device detected. Consider using MPS for better performance.')
+    return x
+
+# noinspection PyShadowingNames
+def parameter(x: Array) -> Array:
+    return Parameter(x)
+
+
+def detach(a: Array) -> Array:
+    return a.detach()
+
+# # noinspection PyShadowingNames
+# def zeros(shape: Shape, dtype: DTypeLike = ..., *args, **kwargs) -> Array: ...
+#
+# # noinspection PyShadowingNames
+# def ones(shape: Shape, dtype: DTypeLike = ..., *args, **kwargs) -> Array: ...
+#
+# # noinspection PyShadowingNames
+# def full(shape: Shape, fill_value: Scalar, dtype: DTypeLike = ..., *args, **kwargs) -> Array: ...
+#
+# # noinspection PyShadowingNames
+# def zeros_like(array: Array, dtype: DTypeLike = ..., *args, **kwargs) -> Array: ...
+#
+# def ones_like(array: Array, dtype: DTypeLike = ..., *args, **kwargs) -> Array: ...
+#
+# def full_like(array: Array, fill_value: Scalar, dtype: DTypeLike = ..., *args, **kwargs) -> Array: ...
+#
+# def fill(array: Array, fill_value: Scalar, /, **kwargs) -> None: ...
+#
+# def eye(n: int, m: int = ..., k: int = ..., dtype: DTypeLike = ..., **kwargs) -> Array: ...
+#
+# def trace(a: Array, /, offset: int = 0, axis1: int = 0, axis2: int = 1, dtype: DTypeLike | None = None, **kwargs) -> Array: ...
+#
+# def fromfunction(function, shape, *, dtype=float, like=None, **kwargs) -> Array: ...
+#
+# def arange(start: Scalar, stop: Scalar = ..., step: Scalar = ..., dtype: DType = ...) -> Array: ...
+
+
+def size(a: Array) -> int:
+    return a.numel()
 
 
 def transpose(a: Array, axes: Axes = None) -> Array:
@@ -118,42 +172,47 @@ def select(a: Array, *, where: Array = None) -> Array:
     return a[where]
 
 def maximum(a: ArrayLike, b: ArrayLike) -> Array:
-    return torch.maximum(tensor(a), tensor(b))
+    return torch.maximum(ensure(a), ensure(b))
 
 
 # noinspection PyShadowingBuiltins
 def sum(a: ArrayLike, axis: Axes = None, keepdims: bool = False, dtype: DType = None) -> Array:
-    return torch.sum(tensor(a), dim=axis, keepdim=keepdims, dtype=dtype)
+    return torch.sum(ensure(a), dim=axis, keepdim=keepdims, dtype=dtype)
+
+
+# noinspection PyShadowingBuiltins
+def norm(a: ArrayLike, axis: Axes = None, keepdims: bool = False, dtype: DType = None) -> Array:
+    return torch.norm(ensure(a), dim=axis, keepdim=keepdims, dtype=dtype)
 
 
 # noinspection PyShadowingBuiltins
 def prod(a: ArrayLike, axis: Axes = None, keepdims: bool = False, dtype: DType = None) -> Array:
-    return torch.prod(tensor(a), dim=axis, keepdim=keepdims, dtype=dtype)
+    return torch.prod(ensure(a), dim=axis, keepdim=keepdims, dtype=dtype)
 
 
 # noinspection PyShadowingBuiltins
 def min(a: ArrayLike, axis: Axes = None, keepdims: bool = False) -> Array:
-    return torch.amin(tensor(a), dim=axis, keepdim=keepdims)
+    return torch.amin(ensure(a), dim=axis, keepdim=keepdims)
 
 
 # noinspection PyShadowingBuiltins
 def max(a: ArrayLike, axis: Axes = None, keepdims: bool = False) -> Array:
-    return torch.amax(tensor(a), dim=axis, keepdim=keepdims)
+    return torch.amax(ensure(a), dim=axis, keepdim=keepdims)
 
 
 def mean(a: ArrayLike, axis: Axes = None, keepdims: bool = False, dtype: DType = None) -> Array:
-    return torch.mean(tensor(a), dim=axis, keepdim=keepdims, dtype=dtype)
+    return torch.mean(ensure(a), dim=axis, keepdim=keepdims, dtype=dtype)
 
 
 def logsumexp(a: ArrayLike, axis: Axes = None, keepdims: bool = False) -> Array:
-    return torch.logsumexp(tensor(a), dim=axis, keepdim=keepdims)
+    return torch.logsumexp(ensure(a), dim=axis, keepdim=keepdims)
 
 
 def softmax(a: ArrayLike, axis: Axes = None, keepdims: bool = False, dtype: DType = None) -> Array:
     if axis is None:
         raise ValueError('axis must be specified')
     if isinstance(axis, int):
-        out = torch.softmax(tensor(a), dim=axis, dtype=dtype)
+        out = torch.softmax(ensure(a), dim=axis, dtype=dtype)
         if keepdims:
             shape = list(a.shape)
             if isinstance(axis, int):
@@ -192,7 +251,7 @@ def average(a: ArrayLike, axis: Axes = ..., weights: ArrayLike = ..., **kwargs) 
 def update(array: Array, where: Array, value: ArrayOrScalar) -> None:
     s = full_slices[:array.ndim]
     # s = tuple(slice(None) for _ in range(array.ndim))
-    array[s] = torch.where(tensor(where), tensor(value), tensor(array))
+    array[s] = torch.where(ensure(where), ensure(value), ensure(array))
 
 
 def is_increasing(vals: TorchArray, strict: bool = False) -> bool:
@@ -208,12 +267,55 @@ def is_monotonic(vals: TorchArray, strict: bool = False) -> bool:
             is_monotonic_test(vals, torch.greater if strict else torch.greater_equal))
 
 
-def default_device():
-    return None
-
 
 def new_stream(device) -> Stream:
     return None
 
-from . import functional, random
+peak_memory = 0
+
+def get_peak_memory():
+    get_active_memory()
+    return peak_memory
+
+def get_active_memory():
+    global peak_memory
+    mem = 0
+    if torch.cuda.is_available():
+        mem += torch.cuda.max_memory_allocated()
+    if torch.mps.is_available():
+        mem += torch.mps.current_allocated_memory()
+    if mem > peak_memory:
+        peak_memory = mem
+    return mem
+
+
+from safetensors.torch import save_file, load_file
+
+def load_tensors(filename: str) -> dict[str, Array]:
+    arrays = load_file(filename)
+
+    for k, v in arrays.items():
+        arrays[k] = v.to(device=default_device())
+
+    return arrays
+
+# noinspection PyShadowingBuiltins
+def save_tensors(filename: str, arrays: dict[str, Array], format: str = None) -> None:
+    if format is None:
+        if filename.endswith('.npz'):
+            format = 'npz'
+        elif filename.endswith('.safetensors'):
+            format = 'safetensors'
+
+    for k, v in arrays.items():
+        arrays[k] = v.detach().cpu()
+
+    if format == 'npz':
+        raise ValueError(f'Unknown format {format}')
+    elif format == 'safetensors':
+        save_file(arrays, filename)
+    else:
+        raise ValueError(f'Unknown format {format}')
+
+from . import fast, functional, random
 

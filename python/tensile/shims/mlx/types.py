@@ -7,17 +7,17 @@ import numpy as np
 
 from ..common.types import *
 
-Array: TypeAlias = mx.array
-DType: TypeAlias = mx.Dtype
+Array = mx.array
+DType = mx.Dtype
 
-DTypeLike: TypeAlias = Union[DType, str, type]
-MaybeTuple: TypeAlias = Union[T, tuple[T, ...]]
-AxisSelector: TypeAlias = Union[int, slice, 'Array', Ellipsis, None]
-Selector: TypeAlias = MaybeTuple[AxisSelector]
-ArrayLike: TypeAlias = Union['Array', Scalar, Sequence['ArrayLike'], np.ndarray]
-ArrayOrScalar: TypeAlias = Union['Array', S]
-ArrayOrT: TypeAlias = Union['Array', T, Sequence[T]]
-ArrayOrFloat: TypeAlias = ArrayOrT[float]
+DTypeLike = Union[DType, str, type]
+MaybeTuple = Union[T, tuple[T, ...]]
+AxisSelector = Union[int, slice, 'Array', Ellipsis, None]
+Selector = MaybeTuple[AxisSelector]
+ArrayLike = Union['Array', Scalar, Sequence['ArrayLike'], np.ndarray]
+ArrayOrScalar = Union['Array', S]
+ArrayOrT = Union['Array', T, Sequence[T]]
+ArrayOrFloat = ArrayOrT[float]
 
 float64: DType = mx.float32
 float32: DType = mx.float32

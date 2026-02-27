@@ -2,16 +2,16 @@
 
 from typing import TypeAlias, TypeVar, Union
 
-Scalar: TypeAlias = Union[int, float, bool]
-Shape: TypeAlias = tuple[int, ...]
-ShapeLike: TypeAlias = Union[int, Shape]
-Axis: TypeAlias = int
-Axes: TypeAlias = Union[None, int, tuple[int, ...]]
+Scalar = Union[int, float, bool]
+Shape = tuple[int, ...]
+ShapeLike = Union[int, Shape]
+Axis = int
+Axes = Union[None, int, tuple[int, ...]]
 T = TypeVar('T')
 
 S = TypeVar('S', bound=Scalar)
 
-MaybeTuple: TypeAlias = Union[T, tuple[T, ...]]
+MaybeTuple = Union[T, tuple[T, ...]]
 
 
 __all__ = [

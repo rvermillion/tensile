@@ -15,7 +15,7 @@ WARN = 3
 ERROR = 4
 
 
-LogLevel: TypeAlias = int
+LogLevel = int
 
 log_levels: list[str] = ['trace', 'debug', 'info', 'warn', 'error']
 log_levels_upper: list[str] = [s.upper() for s in log_levels]
@@ -136,7 +136,7 @@ class LogOutput(LogObject):
         raise NotImplementedError()
 
 
-LogFormat: TypeAlias = Callable[[LogEvent], str]
+LogFormat = Callable[[LogEvent], str]
 
 default_format: LogFormat = '{0:T%Y%m%d:%H%M%S} {0.level:>5} {0.origin:40} {0.message}'.format
 

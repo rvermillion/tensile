@@ -3,6 +3,8 @@ from os import environ
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    # from .torch import core, types
+    # from .numpy import core, types
     from .mlx import core, types
 
 else:
@@ -19,3 +21,5 @@ else:
 
     else:
         raise NotImplementedError(f'No tensor shim named {default_shim_name} found!')
+
+ten = core

@@ -73,10 +73,10 @@ def is_dtype(obj: Any) -> TypeGuard[DType]:
 def is_rng(obj: Any) -> TypeGuard[RNG]:
     return False
 
-def astype(a: Any, dtype: DType) -> Array:
+def as_type(a: Any, dtype: DType) -> Array:
     if isinstance(a, Array):
         return a.astype(dtype)
-    return mx.array(a, dtype=dtype)
+    return array(a, dtype=dtype)
 
 from mlx.core import (
     array,
@@ -85,10 +85,10 @@ from mlx.core import (
     full,
     eye, trace,
     arange, concatenate, reshape, repeat,
-    abs, square, sqrt, exp, log, expm1,
+    abs, square, sqrt, exp, log, expm1, cos, sin, tan,
     sum, max, min, mean, std, var, logsumexp, prod,
     cumsum, cumprod, cummax, cummin,
-    clip,
+    clip, pi,
     addmm,
     isinf, isnan,
     matmul,
@@ -99,7 +99,7 @@ from mlx.core import (
     eval, async_eval,
     expand_dims, squeeze,
     save_safetensors,
-    swapaxes, transpose,
+    swapaxes,
     broadcast_to,
     inf,
     all, any,
@@ -109,15 +109,16 @@ from mlx.core import (
     stream, new_stream, default_stream,
     Stream,
     load, save,
-    get_peak_memory,
-    set_wired_limit,
-    device_info, default_device,
+    get_peak_memory, get_active_memory, set_wired_limit,
+    device_info, default_device, set_default_device, set_default_stream,
     synchronize,
     metal,
     quantize, quantized_matmul, dequantize,
 )
 
 clear_cache = metal.clear_cache
+
+def parameter(x: Array) -> Array: return x
 
 
 def softmax(a: ArrayLike, axis: Axes = None, keepdims: bool = False, dtype: DType = None) -> Array:
@@ -143,7 +144,11 @@ from . import fast, linalg, random, functional
 
 ten_kind: str = 'mlx'
 
-debug: bool = True
+debug: bool = False
+
+
+def detach(a: Array) -> Array:
+    return a
 
 
 def debug_eval(*args: Any) -> None:
@@ -257,3 +262,20 @@ def pack_front_sort(a: Array, where: Array, *, fill_value=0, index_dtype: DType 
     return out, count
 
 
+def load_tensors(filename: str) -> dict[str, Array]:
+    return mx.load(filename)
+
+
+# noinspection PyShadowingBuiltins
+def save_tensors(filename: str, arrays: dict[str, Array], format: str = None) -> None:
+    if format is None:
+        if filename.endswith('.npz'):
+            format = 'npz'
+        elif filename.endswith('.safetensors'):
+            format = 'safetensors'
+    if format == 'npz':
+        mx.savez(filename, **arrays)
+    elif format == 'safetensors':
+        save_safetensors(filename, arrays)
+    else:
+        raise ValueError(f'Unknown format {format}')

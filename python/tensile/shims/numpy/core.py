@@ -20,8 +20,12 @@ def is_dtype(obj: Any) -> TypeGuard[DType]:
 def is_rng(obj: Any) -> TypeGuard[RNG]:
     return isinstance(obj, npr.Generator)
 
-def astype(a: Any, dtype: DTypeLike) -> Array:
+def as_type(a: Any, dtype: DTypeLike) -> Array:
     return np.asarray(a, dtype=dtype)
+
+def detach(a: Array) -> Array:
+    return a
+
 
 from numpy import (
     array,

@@ -7,16 +7,16 @@ import numpy as np
 
 from ..common.types import *
 
-Array: TypeAlias = torch.Tensor
-DType: TypeAlias = torch.dtype
+Array = torch.Tensor
+DType = torch.dtype
 
-DTypeLike: TypeAlias = Union[DType, str, type]
-AxisSelector: TypeAlias = Union[int, slice, 'Array', Ellipsis, None]
-Selector: TypeAlias = MaybeTuple[AxisSelector]
-ArrayLike: TypeAlias = Union['Array', Scalar, Sequence['ArrayLike'], np.ndarray]
-ArrayOrScalar: TypeAlias = Union['Array', S]
-ArrayOrT: TypeAlias = Union['Array', T, Sequence[T]]
-ArrayOrFloat: TypeAlias = ArrayOrT[float]
+DTypeLike = Union[DType, str, type]
+AxisSelector = Union[int, slice, 'Array', Ellipsis, None]
+Selector = MaybeTuple[AxisSelector]
+ArrayLike = Union['Array', Scalar, Sequence['ArrayLike'], np.ndarray]
+ArrayOrScalar = Union['Array', S]
+ArrayOrT = Union['Array', T, Sequence[T]]
+ArrayOrFloat = ArrayOrT[float]
 
 float64: DType = torch.float32
 float32: DType = torch.float32

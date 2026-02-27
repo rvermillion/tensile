@@ -30,15 +30,18 @@ Generator: type[RNG] = None # mxr.Generator
 def default_rng(seed: int = None) -> RNG:
     return RNG(seed)
 
-def normal(loc: ArrayLike = 0.0, scale: ArrayLike = 1.0, shape: ShapeLike = ...) -> Array:
-    return torch.normal(mean=loc, std=scale, size=to_shape(shape))
+def normal(loc: ArrayLike = 0.0, scale: ArrayLike = 1.0, shape: ShapeLike = ..., device=None) -> Array:
+    if device is None: device = torch.get_default_device()
+    return torch.normal(mean=loc, std=scale, size=to_shape(shape), device=device)
 
-def uniform(low: ArrayLike = 0.0, high: ArrayLike = 1.0, shape: ShapeLike = ...) -> Array:
-    u = torch.rand(to_shape(shape))
+def uniform(low: ArrayLike = 0.0, high: ArrayLike = 1.0, shape: ShapeLike = ..., device=None) -> Array:
+    if device is None: device = torch.get_default_device()
+    u = torch.rand(to_shape(shape), device=device)
     return low + (high - low) * u
 
 def permutation(size: int, **kwargs) -> Array:
-    return torch.randperm(size)
+    kwargs.setdefault('device', torch.get_default_device())
+    return torch.randperm(size, **kwargs)
 
 # noinspection PyShadowingNames
 def seed(seed: int) -> None:

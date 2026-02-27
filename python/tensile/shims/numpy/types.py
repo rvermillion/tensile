@@ -12,14 +12,14 @@ Array = np.ndarray
 DType = np.dtype
 RNG = npr.Generator
 
-DTypeLike: TypeAlias = Union[DType, str, type]
-MaybeTuple: TypeAlias = Union[T, tuple[T, ...]]
-AxisSelector: TypeAlias = Union[int, slice, 'Array', Ellipsis, None]
-Selector: TypeAlias = MaybeTuple[AxisSelector]
-ArrayLike: TypeAlias = Union['Array', Scalar, Sequence['ArrayLike']]
-ArrayOrScalar: TypeAlias = Union['Array', S]
-ArrayOrT: TypeAlias = Union['Array', T, Sequence[T]]
-ArrayOrFloat: TypeAlias = ArrayOrT[float]
+DTypeLike = Union[DType, str, type]
+MaybeTuple = Union[T, tuple[T, ...]]
+AxisSelector = Union[int, slice, 'Array', Ellipsis, None]
+Selector = MaybeTuple[AxisSelector]
+ArrayLike = Union['Array', Scalar, Sequence['ArrayLike']]
+ArrayOrScalar = Union['Array', S]
+ArrayOrT = Union['Array', T, Sequence[T]]
+ArrayOrFloat = ArrayOrT[float]
 
 Stream = None
 

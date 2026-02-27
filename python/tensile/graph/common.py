@@ -1,4 +1,5 @@
 #  Copyright (c) 2026. Richard Vermillion. All Rights Reserved.
+
 from typing import (Any, Callable, Iterable, Optional, Self, Sequence,
                     TypeAlias, Union, TYPE_CHECKING)
 
@@ -17,19 +18,19 @@ TensorType: TypeAlias = 'tensile.graph.tensor.Tensor'
 RegionType: TypeAlias = 'tensile.graph.region.Region'
 PatchType: TypeAlias = 'tensile.graph.patch.Patch'
 
-Array: TypeAlias = ten.Array
-DType: TypeAlias = ten.DType
-Shape: TypeAlias = ten.Shape
-Slice: TypeAlias = slice
+Array = ten.Array
+DType = ten.DType
+Shape = ten.Shape
+Slice = slice
 
-Index: TypeAlias = Union[int, Array, slice, Ellipsis, None]
-Indices: TypeAlias = Union[Index, tuple[Index, ...]]
+Index = Union[int, Array, slice, Ellipsis, None]
+Indices = Union[Index, tuple[Index, ...]]
 
-Axes: TypeAlias = tuple[int, ...]
-AxisChoice: TypeAlias = Union[None, int, Sequence[int]]
+Axes = tuple[int, ...]
+AxisChoice = Union[None, int, Sequence[int]]
 
 
-Functional: TypeAlias = Callable[[Array], Array]
+Functional = Callable[[Array], Array]
 
 
 def repr_arg(arg: Any) -> str:
