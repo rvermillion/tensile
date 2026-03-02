@@ -122,9 +122,10 @@ class Registry(RootObject, Generic[T]):
             if key.startswith(kind_prefix):
                 kind = key[len(kind_prefix):]
                 for ns in namespaces:
-                    if factory := getattr(ns, kind, None):
-                        self.factories[key] = factory
-                        return factory
+                    if obj := getattr(ns, kind, None):
+                        self.register_object(key, obj)
+                        # self.factories[key] = factory
+                        return self.factories[key]
         return None
 
     def fallback_factory(self, key: str) -> Optional[Factory[T]]:
@@ -150,6 +151,8 @@ class Registry(RootObject, Generic[T]):
         key = factory_key(key=key, kind=kind, from_type=from_type, default_kind=self.default_kind)
         factory = self.peek_factory(key)
 
+        if kind == 'relu':
+            pass
         if factory is None:
             factory = Registry.method_factory(self.ifc, key, reg=self)
             # if key.startswith('from:'):

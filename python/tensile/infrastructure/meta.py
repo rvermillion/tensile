@@ -217,7 +217,7 @@ class Meta(UpdateableObject):
             return Registry.method_factory(self.cls, factory_key(key=key, kind=kind, from_type=from_type))
         return registry.get_factory(key=key, kind=kind, from_type=from_type)
 
-    def coerce(self, spec: Any = None, /, **kwargs) -> Self:
+    def coerce(self, spec: Any = None, /, **kwargs) -> Any:
 
         if self.has_instance(spec):
             return spec
@@ -525,10 +525,15 @@ class ObjectMeta(Meta):
             # print('-' * 100)
 
     def engineer_fields(self) -> None:
-        for f in self.own_fields.values():
+        own_fields = self.own_fields
+        for f in own_fields.values():
             f.engineer(self)
 
-        self.field_inits = tuple(f.init for f in self.fields.values() if Scope.is_instance(f.scope) and f.init)
+        init_fields = [f for f in self.fields.values() if Scope.is_instance(f.scope) and f.init]
+
+        init_fields.sort(key=lambda f: f.init_order)
+
+        self.field_inits = tuple(f.init for f in init_fields)
 
     def init(self, this: Any, spec: Spec):
         for init in self.field_inits:

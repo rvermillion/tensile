@@ -314,6 +314,7 @@ if TYPE_CHECKING:
         ignore: bool = ...,
         coerce: bool|str|Coercer|None = ...,
         lazy: bool|str|Getter|None = ...,
+        init_order: int = ...,
         **kwargs
     ) -> Keywords: ...
 else:
@@ -616,6 +617,7 @@ field_attr_defaults: dict[str, Any] = {
     'scope': Scope.instance_scope,
     # 'slot': None,
     'visibility': Visibility.public,
+    'init_order': 1000,
 }
 
 def default_builder(attr, default: Any) -> Callable[['Field', Spec], Any]:
@@ -857,7 +859,7 @@ class Field(RootObject):
 
     __slots__ = ['owner', 'name', 'spec', 'type', 'aliases', 'slot',
                  'peek', 'lazy', 'get', 'poke', 'coerce', 'write',
-                 'set', 'delete', 'init', 'is_set', 'update',
+                 'set', 'delete', 'init', 'init_order', 'is_set', 'update',
                  'default', 'default_factory', 'required', 'readonly',
                  'doc', 'scope', 'member', 'visibility', 'delegate',
                  'changing', 'changed']
@@ -879,6 +881,7 @@ class Field(RootObject):
     update: Setter
     delete: Optional[Deleter]
     init: Optional[Initter]
+    init_order: int
     changed: Optional[Setter]
     changing: Optional[Setter]
     delegate: Optional[str]
