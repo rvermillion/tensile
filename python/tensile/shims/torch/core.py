@@ -1,5 +1,7 @@
 #  Copyright (c) 2025. Richard Vermillion. All Rights Reserved.
-from typing import Any, Sequence, TypeAlias, TypeGuard, Union
+import contextlib
+from pathlib import Path
+from typing import Any, Callable, Sequence, TypeAlias, TypeGuard, TypeVar, Union
 
 import torch
 import numpy as np
@@ -82,16 +84,17 @@ from torch import (
     tensor,
     zeros, zeros_like, ones, ones_like, full, full_like, empty, empty_like,
     arange, concatenate, reshape,
-    abs, square, sqrt, exp, log, expm1, sin, cos, tan,
+    abs, square, sqrt, exp, log, expm1, sin, cos, tan, sigmoid,
     median, std, var, quantile,
     pi,
     addmm,
-    isinf, isnan,
+    isinf, isnan, isfinite,
     matmul,
     minimum, clip,
     argmin, argmax,
     floor, floor_divide,
     sort, where,
+    take, take_along_dim,
     swapaxes,
     broadcast_to,
     inf,
@@ -131,6 +134,155 @@ def parameter(x: Array) -> Array:
 def detach(a: Array) -> Array:
     return a.detach()
 
+
+def require_grad(a: Array, grad: bool = True) -> Array:
+    a.requires_grad = grad
+    return a
+
+
+
+
+def quantize(a: Array, group_size: int, bits: int, mode: str = 'affine') -> tuple[Array, Array, Array]:
+    if group_size <= 0:
+        raise ValueError("group_size must be positive")
+    if bits <= 0 or bits > 8:
+        raise ValueError("bits must be positive and <= 8")
+    if mode != 'affine':
+        raise ValueError("mode must be 'affine'")
+
+    q = torch.zeros((*a.shape[:-1], a.shape[-1] // 4), dtype=a.dtype)
+    scales = torch.ones((*a.shape[:-1], a.shape[-1] // group_size), dtype=a.dtype)
+    biases = torch.zeros((*a.shape[:-1], a.shape[-1] // group_size), dtype=a.dtype)
+
+    return q, scales, biases
+
+
+# noinspection PyUnusedLocal,PyShadowingNames
+def quantized_matmul(x: Array, weight: Array, scales: Array = None, biases: Array = None, transpose: bool = False,
+                     group_size: int = None, bits: int = None, mode: str = None) -> Array:
+    """
+    Correctness-first Torch version of MLX-style quantized_matmul.
+
+    Dequantizes the weight, then does matmul.
+
+    Common linear case:
+      x       : (..., Q, I)
+      weight  : (O, I_packed)
+      scales  : (O, I // group_size)
+      result  : (..., Q, O)   when transpose=True
+    """
+    w = dequantize(
+        weight,
+        scales=scales,
+        biases=biases,
+        group_size=group_size,
+        bits=bits,
+        mode=mode,
+    ).to(x.dtype)
+
+    if transpose:
+        return x @ w.transpose(-2, -1)
+    else:
+        return x @ w
+
+
+def _unpack_uint32_last_dim(x: Array, bits: int) -> Array:
+    """
+    Unpack packed uint32 values along the last dimension.
+
+    For bits=8:
+      (..., N_packed) -> (..., N_packed * 4)
+
+    Returns integer codes in torch.int32.
+    """
+    if x.dtype != torch.uint32:
+        raise TypeError(f"Expected uint32 packed tensor, got {x.dtype}")
+    if bits <= 0 or 32 % bits != 0:
+        raise ValueError(f"bits must divide 32, got {bits}")
+
+    values_per_word = 32 // bits
+    mask = (1 << bits) - 1
+
+    # Bit ops are more predictable on int64 than uint32 in torch.
+    x64 = x.to(device="cpu").to(dtype=torch.int64)
+
+    shifts = torch.arange(
+        0, 32, bits, device=x64.device, dtype=torch.int32
+    )  # [0, bits, 2*bits, ...]
+
+    # (..., N_packed, values_per_word)
+    unpacked = (x64.unsqueeze(-1) >> shifts) & mask
+
+    # Flatten packed words into the logical last dimension
+    return unpacked.reshape(*x.shape[:-1], x.shape[-1] * values_per_word).to(dtype=torch.int32, device=x.device)
+
+
+# noinspection PyUnusedLocal,PyShadowingNames
+def dequantize(x: Array, scales: Array = None, biases: Array = None,
+               group_size: int = None, bits: int = None, mode: str = None) -> Array:
+    """
+    MLX-style affine dequantization in Torch.
+
+    Assumes:
+      - x is packed uint32
+      - packing is along the last dimension
+      - scales/biases correspond to groups along that same logical dimension
+
+    Typical shapes for a quantized linear weight:
+      x       : (..., O, I_packed)
+      scales  : (..., O, I // group_size)
+      biases  : (..., O, I // group_size)
+      result  : (..., O, I)
+    """
+    mode = mode or "affine"
+    bits = bits or 8
+    group_size = group_size or 64
+
+    if mode != "affine":
+        raise NotImplementedError(f"Only affine mode is implemented, got {mode!r}")
+
+    q = _unpack_uint32_last_dim(x, bits).to(scales.dtype)  # (..., logical_dim)
+
+    logical_dim = q.shape[-1]
+    if logical_dim % group_size != 0:
+        raise ValueError(
+            f"Unpacked last dim {logical_dim} is not divisible by group_size={group_size}"
+        )
+
+    num_groups = logical_dim // group_size
+
+    # Group the logical last dimension
+    q = q.reshape(*q.shape[:-1], num_groups, group_size)  # (..., groups, group_size)
+
+    if scales.shape[-1] != num_groups:
+        raise ValueError(
+            f"scales last dim {scales.shape[-1]} != expected num_groups {num_groups}"
+        )
+
+    s = scales.unsqueeze(-1)  # (..., groups, 1)
+
+    if biases is None:
+        b = 0.0
+    else:
+        if biases.shape != scales.shape:
+            raise ValueError(f"biases shape {biases.shape} must match scales shape {scales.shape}")
+        b = biases.unsqueeze(-1)  # (..., groups, 1)
+
+    w = q * s + b
+    return w.reshape(*w.shape[:-2], logical_dim).to(scales.dtype)
+
+
+@contextlib.contextmanager
+def stream(s: Stream):
+    yield s
+
+
+C = TypeVar('C', bound=Callable)
+
+
+def compile(**kwargs) -> Callable[[C], C]:
+    return torch.compile(**kwargs)
+
 # # noinspection PyShadowingNames
 # def zeros(shape: Shape, dtype: DTypeLike = ..., *args, **kwargs) -> Array: ...
 #
@@ -156,6 +308,13 @@ def detach(a: Array) -> Array:
 # def fromfunction(function, shape, *, dtype=float, like=None, **kwargs) -> Array: ...
 #
 # def arange(start: Scalar, stop: Scalar = ..., step: Scalar = ..., dtype: DType = ...) -> Array: ...
+
+def contiguous(a: Array) -> Array:
+    return a.contiguous()
+
+
+def take_along_axis(a: Array, indices: Array, axis: int = None) -> Array:
+    return take_along_dim(a, indices, dim=axis)
 
 
 def size(a: Array) -> int:
@@ -291,29 +450,42 @@ def get_active_memory():
 
 from safetensors.torch import save_file, load_file
 
-def load_tensors(filename: str) -> dict[str, Array]:
-    arrays = load_file(filename)
+def _load_safetensors(path: Path, device=None, **kwargs) -> dict[str, Array]:
+    if device is None: device = default_device()
+    arrays = load_file(path)
+    return {name: x.to(device) for name, x in arrays.items()}
 
-    for k, v in arrays.items():
-        arrays[k] = v.to(device=default_device())
 
-    return arrays
+tensor_loaders = {
+    'safetensors': _load_safetensors
+}
 
 # noinspection PyShadowingBuiltins
-def save_tensors(filename: str, arrays: dict[str, Array], format: str = None) -> None:
-    if format is None:
-        if filename.endswith('.npz'):
-            format = 'npz'
-        elif filename.endswith('.safetensors'):
-            format = 'safetensors'
+def load_tensors(filename: str|Path, /, format: str = None, **kwargs) -> dict[str, Array]:
+    filename = Path(filename)
+    if format is None: format = filename.suffix[1:]
+    if loader := tensor_loaders.get(format):
+        return loader(filename, **kwargs)
+    raise ValueError(f'Unsupported file format: {format}')
+
+
+def _save_safetensors(path: Path, arrays: dict[str, Array], **kwargs):
+    save_file(arrays, path, **kwargs)
+
+tensor_savers = {
+    'safetensors': _save_safetensors,
+}
+
+# noinspection PyShadowingBuiltins
+def save_tensors(filename: str|Path, arrays: dict[str, Array], format: str = None) -> None:
+    filename = Path(filename)
+    if format is None: format = filename.suffix[1:]
 
     for k, v in arrays.items():
         arrays[k] = v.detach().cpu()
 
-    if format == 'npz':
-        raise ValueError(f'Unknown format {format}')
-    elif format == 'safetensors':
-        save_file(arrays, filename)
+    if saver := tensor_savers.get(format):
+        saver(filename, arrays)
     else:
         raise ValueError(f'Unknown format {format}')
 

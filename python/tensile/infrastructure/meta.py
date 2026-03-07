@@ -2,10 +2,10 @@
 import sys
 
 from .types import *
-from .functional import *
+from .behavior import *
 from .root import *
 from . import field as fields
-from .field import Field, FieldType, field
+from .field import Field, FieldType, field, private_slot
 from .registry import Registry, Factory, factory_key, meta_by_qname, meta_by_type, meta_register
 from .util import class_qname, process_specs
 
@@ -160,6 +160,10 @@ class Meta(UpdateableObject):
     @property
     def fields(self) -> dict[str, Field]:
         return {}
+
+    @property
+    def instance_fields(self) -> dict[str, Field]:
+        return {n: f for n, f in self.fields.items() if Scope.is_instance(f.scope)}
 
     def add_child(self, child: 'Meta'):
         self.children.append(child)
@@ -511,9 +515,7 @@ class ObjectMeta(Meta):
                     if value is not ... and isinstance(value, MemberDescriptorType):
                         field_spec['member'] = value
 
-                slot = f'_{name}'
-                if self.has_slot(slot):
-                    field_spec['slot'] = slot
+                self.add_slot(cls, name, field_spec)
 
                 if field_spec.get('visibility', Visibility.public) is Visibility.protected:
                     self.debug(f'meta: processing protected field [{name}]:', field_spec)
@@ -523,6 +525,19 @@ class ObjectMeta(Meta):
                 self.add_field(name, field_spec)
 
             # print('-' * 100)
+
+    def slot_names(self, name: str) -> Iterable[str]:
+        return private_slot(name),
+
+    def add_slot(self, cls: type, name: str, field_spec: Spec) -> None:
+        for slot in self.slot_names(name):
+            if self.has_slot(slot):
+                field_spec['slot'] = slot
+                if 'member' not in field_spec:
+                    value = cls.__dict__.get(slot, ...)
+                    if value is not ...  and isinstance(value, MemberDescriptorType):
+                        field_spec['member'] = value
+                return
 
     def engineer_fields(self) -> None:
         own_fields = self.own_fields
@@ -662,4 +677,5 @@ __all__ = [
     'coerce',
     'field',
     'provides',
+    'private_slot'
 ]

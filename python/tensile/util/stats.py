@@ -2,7 +2,7 @@
 
 from typing import Any, Callable, Iterable
 
-from ..infrastructure import functional
+from ..infrastructure import function
 from .. import ten, Array
 
 Stat = Callable[[ten.Array], ten.Scalar|ten.Array]
@@ -20,8 +20,8 @@ def make_scalar_stat(stat: Callable[..., ten.ArrayOrScalar], *args, **kwargs) ->
 
 default_stats: dict[str, Stat] = {
     "l2": make_scalar_stat(ten.norm),
-    "max_abs": make_scalar_stat(functional.compose([ten.abs, ten.max])),
-    "mean_abs": make_scalar_stat(functional.compose([ten.abs, ten.mean])),
+    "max_abs": make_scalar_stat(function.compose(ten.abs, ten.max)),
+    "mean_abs": make_scalar_stat(function.compose(ten.abs, ten.mean)),
 }
 
 all_stats: dict[str, Stat] = {

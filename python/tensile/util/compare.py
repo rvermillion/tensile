@@ -7,8 +7,7 @@ from typing import Annotated, Any, Self
 from ..infrastructure import Object, field
 from .. import ten
 from .stats import get_stats
-from ..infrastructure import predicate
-from ..infrastructure.types import Predicate
+from ..infrastructure import Predicate, Predicates
 
 
 CompareResult = str|dict[str, 'CompareResult']|None
@@ -34,8 +33,8 @@ class Comparison(Object):
     rname: Annotated[str, field()]
     eps: Annotated[float, field(default=default_eps)]
     ignore_key: Annotated[Predicate[str], field(default=default_ignore_key)]
-    ignore_file: Annotated[Predicate[str], field(default=predicate.never)]
-    ignore_path: Annotated[Predicate[str], field(default=predicate.never)]
+    ignore_file: Annotated[Predicate[str], field(default=Predicates.never)]
+    ignore_path: Annotated[Predicate[str], field(default=Predicates.never)]
 
     def _lazy_lname(self):
         return str(self.left)
@@ -215,4 +214,4 @@ def compose_predicate(ignore_key: Predicate[str] = None, ignore_keys: set[str] =
     if not preds:
         preds.append(default_ignore_key)
 
-    return predicate.any(*preds)
+    return Predicates.any(*preds)

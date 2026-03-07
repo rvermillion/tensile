@@ -2,7 +2,7 @@
 import json
 
 from .field import field
-from .meta import ObjectMeta, RootObject, Spec, UpdateableObject
+from .meta import ObjectMeta, RootObject, Spec, UpdateableObject, private_slot
 from .types import Annotated, Any, Callable, ClassVar, Keywords, Mapping, Optional, Self, Sequence, TypeVar
 from .util import process_specs
 
@@ -43,13 +43,32 @@ LIFECYCLE_READY = 4
 LIFECYCLE_ERROR = 100
 
 
-class Object(UpdateableObject):
+class ObjectClass(type):
+
+    # noinspection PyPep8Naming
+    def __new__(metacls, name: str, bases: tuple[type, ...], spec: dict[str, Any], /, interface: bool = False, **kwds):
+
+        if slots := spec.get('__slots__', ()):
+            slots = tuple(private_slot(slot) for slot in slots)
+            spec['__slots__'] = slots
+
+        cls = super().__new__(metacls, name, bases, spec, **kwds)
+
+        Meta = getattr(cls, 'Meta', ObjectMeta)
+
+        Meta.engineer(cls, interface=interface, **kwds)
+
+        return cls
+
+
+
+class Object(UpdateableObject, metaclass=ObjectClass):
 
     __slots__ = ['spec']
 
     spec: Annotated[Spec, field(
         doc='The original spec used to create this object',
-        init=None,
+        init=False,
     )]
     meta: ClassVar[Annotated[ObjectMeta, field(
         doc='The meta object for this class.'
@@ -121,10 +140,10 @@ class Object(UpdateableObject):
     def cast(self, cls: type[T]) -> Optional[T]:
         return self if isinstance(self, cls) else None
 
-    def __init_subclass__(cls, interface: bool = None, **kwargs):
-        super().__init_subclass__(**kwargs)
-
-        cls.Meta.engineer(cls, interface=interface, **kwargs)
+    # def __init_subclass__(cls, interface: bool = None, **kwargs):
+    #     super().__init_subclass__(**kwargs)
+    #
+    #     cls.Meta.engineer(cls, interface=interface, **kwargs)
 
     # kind: Optional[str]
     # defaults: ClassVar[Optional[Keywords]] = None
@@ -171,7 +190,7 @@ class Object(UpdateableObject):
         # if factory:
         #     # noinspection PyCallingNonCallable
         #     return factory(spec, **kwargs)
-        raise ValueError(f'Cannot coerce {spec} to {cls}')
+        raise ValueError(f'Cannot coerce {spec!r} to {cls}')
 
     auto_coerce: ClassVar[Annotated[bool, field(ignore=True)]] = False
 
@@ -238,10 +257,10 @@ class Object(UpdateableObject):
     Meta: ClassVar[type[ObjectMeta]] = ObjectMeta
 
 
-ObjectMeta.engineer(Object)
-
-BaseObject = Object
-# BaseObject.meta = Meta(BaseObject)
+# ObjectMeta.engineer(Object)
+#
+# BaseObject = Object
+# # BaseObject.meta = Meta(BaseObject)
 
 
 class Storable:
@@ -274,7 +293,6 @@ class Loadable:
 
 
 __all__ = [
-    'BaseObject',
     'Loadable',
     'Object',
     'RootObject',

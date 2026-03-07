@@ -1,7 +1,7 @@
 #  Copyright (c) 2025. Richard Vermillion. All Rights Reserved.
 
 
-from .functional import *
+from .behavior import *
 from .root import *
 from .util import class_qname
 from .registry import add_qname_listener, meta_by_qname
@@ -12,6 +12,10 @@ if TYPE_CHECKING:
 
 
 cached_field_types: dict[Any, 'FieldType'] = {}
+
+
+def private_slot(name: str) -> str:
+    return f'_pvt_{name}'
 
 
 class FieldType(RootObject):
@@ -742,8 +746,12 @@ def build_setter(poke: Setter = None, coerce: Coercer = None, peek: Getter = Non
 
             def setter(this: Any, val: Any):
                 try:
+                    try:
+                        old = peek(this)
+                    except AttributeError:
+                        old = None
                     poke(this, val)
-                    changed(this, val, peek(this))
+                    changed(this, val, old)
                 except Exception as e:
                     raise TypeError(f'{desc}: cannot set to {val!r} in {this!r}') from e
         else:
@@ -758,8 +766,12 @@ def build_setter(poke: Setter = None, coerce: Coercer = None, peek: Getter = Non
                 def setter(this: Any, val: Any):
                     try:
                         changing(this, val)
+                        try:
+                            old = peek(this)
+                        except AttributeError:
+                            old = None
                         poke(this, val)
-                        changed(this, val, peek(this))
+                        changed(this, val, old)
                     except Exception as e:
                         raise TypeError(f'{desc}: cannot set to {val!r} in {this!r}') from e
 
@@ -783,8 +795,12 @@ def build_setter(poke: Setter = None, coerce: Coercer = None, peek: Getter = Non
                     except Exception as e:
                         raise TypeError(f'{desc}: cannot coerce {val!r} in {this!r}') from e
                     try:
+                        try:
+                            old = peek(this)
+                        except AttributeError:
+                            old = None
                         poke(this, coerced)
-                        changed(this, coerced, peek(this))
+                        changed(this, coerced, old)
                     except Exception as e:
                         raise TypeError(f'{desc}: cannot set to {coerced!r} in {this!r}') from e
         else:
@@ -807,8 +823,12 @@ def build_setter(poke: Setter = None, coerce: Coercer = None, peek: Getter = Non
                         raise TypeError(f'{desc}: cannot coerce {val!r} in {this!r}') from e
                     try:
                         changing(this, coerced)
+                        try:
+                            old = peek(this)
+                        except AttributeError:
+                            old = None
                         poke(this, coerced)
-                        changed(this, coerced, peek(this))
+                        changed(this, coerced, old)
                     except Exception as e:
                         raise TypeError(f'{desc}: cannot set to {coerced!r} in {this!r}') from e
 
@@ -997,8 +1017,14 @@ class Field(RootObject):
         else:
             self.debug('-- skipping {} field: {}', meta, self)
 
-    def override(self, meta: 'Meta', spec: Spec) -> 'Field':
+    def override(self, meta: 'Meta', spec: Spec) -> Optional['Field']:
         cls = spec.get('field_class', meta.Field)
+        for key, val in self.spec.items():
+            spec.setdefault(key, val)
+        # print(f'{meta.qname} override: {self.name} with {spec}')
+        # if len(spec) == 1:
+        #     if 'type' in spec:
+        #         return None
         return cls(meta, self.name, spec)
 
     def to_spec(self, spec: Spec):
@@ -1134,6 +1160,8 @@ class Field(RootObject):
         return writer
 
     def build_init(self, spec: Spec) -> Optional[Initter]:
+        if not spec.get('init', True):
+            return None
         if self.readonly and isinstance(self.member, property):
             return None
         return name_initter(self.name, self.aliases, writer=self.write,
@@ -1146,8 +1174,9 @@ class Field(RootObject):
         return build_delete(member=self.member, slot=self.slot, desc=self.qname)
 
     def build_slot(self, spec: Spec) -> Optional[str]:
-        return None if isinstance(self.member, MemberDescriptorType) else '_' + self.name
-        # return '_' + self.name
+        if slot := spec.get('slot'):
+            return slot
+        return None if isinstance(self.member, MemberDescriptorType) else private_slot(self.name)
 
     attr_builders: ClassVar[dict[str, Callable[['Field', Spec], Any]]] = {
         **field_attr_default_builders,

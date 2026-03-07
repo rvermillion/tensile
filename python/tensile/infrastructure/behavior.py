@@ -10,59 +10,36 @@ class MetaError(RuntimeError):
     pass
 
 
-is_equiv: Equiv
-eq_equiv: Equiv
+is_equiv: Equiv[Any]
+eq_equiv: Equiv[Any]
 
 
 none: Transform[Any, None]
 
 
-def constant(x: X) -> Transform[Any, X]:
-    return name_function(lambda x: x, name=f'constant({x!r})')
+def relation_predicate(relation: Relation[T, X]) -> Predicate[tuple[T, X]]:
+    def predicate(pair: tuple[T, X]) -> bool:
+        return relation(*pair)
+    return predicate
 
 
-def identity(x: T) -> T:
-    return x
+def predicate_relation(predicate: Predicate[tuple[T, X]]) -> Relation[T, X]:
+    def relation(a: T, b: X) -> bool:
+        return predicate((a, b))
+    return relation
 
 
-def none(x: Any) -> None:
-    return None
+def left_relation(relation: Relation[T, X], right: X) -> Predicate[T]:
+    def predicate(a: T) -> bool:
+        return relation(a, right)
+    return predicate
 
 
-def chunk(seq: Sequence[T], chunk_size: int) -> Iterable[Sequence[T]]:
-    cnt = len(seq)
-    s = 0
-    e = chunk_size
-    while e < cnt:
-        yield seq[s:e]
-        s = e
-        e += chunk_size
-    yield seq[s:]
+def right_relation(relation: Relation[T, X], left: T) -> Predicate[X]:
+    def predicate(a: X) -> bool:
+        return relation(left, a)
+    return predicate
 
-
-def compose(fns: Sequence[Callable[[T], T]]) -> Callable[[T], T]:
-    if fns:
-        fns = [fn for fn in fns if fn is not identity and fn is not None]
-        if fns:
-            cnt = len(fns)
-            if cnt == 1:
-                return fns[0]
-            elif cnt == 2:
-                a, b = fns
-                def composed(arg: T) -> T:
-                    return b(a(arg))
-            elif cnt == 3:
-                a, b, c = fns
-                def composed(arg: T) -> T:
-                    return c(b(a(arg)))
-            elif cnt == 4:
-                a, b, c, d = fns
-                def composed(arg: T) -> T:
-                    return d(c(b(a(arg))))
-            else:
-                return compose([compose(f) for f in chunk(fns, min(4, (cnt+3)//4))])
-            return name_function(composed, name=f'compose({", ".join(fn.__name__ for fn in fns)})')
-    return identity
 
 
 
@@ -74,7 +51,8 @@ def eq_equiv(a: Any, b: Any) -> bool:
     return a == b
 
 
-def none_getter(this: Any) -> None:
+# noinspection PyUnusedLocal
+def none_getter(this: Any) -> Any:
     return None
 
 

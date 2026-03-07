@@ -1,6 +1,6 @@
 #  Copyright (c) 2025. Richard Vermillion. All Rights Reserved.
-
-from typing import Any, Literal, TypeGuard
+from pathlib import Path
+from typing import Any, Callable, Literal, TypeGuard, TypeVar
 
 import mlx.core as mx
 import mlx.core.random as mxr
@@ -85,12 +85,12 @@ from mlx.core import (
     full,
     eye, trace,
     arange, concatenate, reshape, repeat,
-    abs, square, sqrt, exp, log, expm1, cos, sin, tan,
+    abs, square, sqrt, exp, log, expm1, cos, sin, tan, sigmoid,
     sum, max, min, mean, std, var, logsumexp, prod,
     cumsum, cumprod, cummax, cummin,
     clip, pi,
     addmm,
-    isinf, isnan,
+    isinf, isnan, isfinite,
     matmul,
     minimum, maximum, clip,
     argmin, argmax, argpartition, argsort,
@@ -98,7 +98,9 @@ from mlx.core import (
     sort, where,
     eval, async_eval,
     expand_dims, squeeze,
+    take, take_along_axis,
     save_safetensors,
+    contiguous,
     swapaxes,
     broadcast_to,
     inf,
@@ -120,23 +122,26 @@ clear_cache = metal.clear_cache
 
 def parameter(x: Array) -> Array: return x
 
+def require_grad(a: Array, grad: bool = True) -> Array: return a
 
-def softmax(a: ArrayLike, axis: Axes = None, keepdims: bool = False, dtype: DType = None) -> Array:
-    if dtype is not None and dtype != a.dtype:
-        a = a.astype(dtype)
-    out = mx.softmax(a, axis=axis)
-    if keepdims:
-        if axis is None:
-            shape = [1] * a.ndim
-        else:
-            shape = list(a.shape)
-            if isinstance(axis, int):
-                shape[axis] = 1
-            elif isinstance(axis, tuple):
-                for ax in axis:
-                    shape[ax] = 1
-        out = out.reshape(*shape)
-    return out
+
+softmax = mx.softmax
+# def softmax(a: ArrayLike, axis: Axes = None, keepdims: bool = False, dtype: DType = None) -> Array:
+#     if dtype is not None and dtype != a.dtype:
+#         a = a.astype(dtype)
+#     out = mx.softmax(a, axis=axis)
+#     if keepdims:
+#         if axis is None:
+#             shape = [1] * a.ndim
+#         else:
+#             shape = list(a.shape)
+#             if isinstance(axis, int):
+#                 shape[axis] = 1
+#             elif isinstance(axis, tuple):
+#                 for ax in axis:
+#                     shape[ax] = 1
+#         out = out.reshape(*shape)
+#     return out
 
 
 from . import fast, linalg, random, functional
@@ -165,11 +170,20 @@ def full_like(a: Array, fill_value: Scalar, dtype: DType = None, *args, **kwargs
         dtype = a.dtype
     return mx.full(a.shape, fill_value, dtype=dtype)
 
+from mlx.nn import Module
 empty = mx.zeros
 empty_like = mx.zeros_like
 
 def fromfunction(function, shape, *, dtype=float, like=None, **kwargs) -> Array:
     raise NotImplementedError()
+
+
+C = TypeVar('C', bound=Callable)
+
+
+def compile(**kwargs) -> Callable[[C], C]:
+    return mx.compile
+
 
 
 def broadcast_shapes(a: ArrayLike, b: ArrayLike) -> Shape:
@@ -262,20 +276,35 @@ def pack_front_sort(a: Array, where: Array, *, fill_value=0, index_dtype: DType 
     return out, count
 
 
-def load_tensors(filename: str) -> dict[str, Array]:
-    return mx.load(filename)
+_tensor_loaders = {
+}
 
+
+def load_tensors(filename: str|Path, format: str = None) -> dict[str, Array]:
+    path = Path(filename)
+    if format is None: format = path.suffix[1:]
+    if loader := _tensor_loaders.get(format):
+        return loader(path)
+    return mx.load(path, format=format)
+
+
+def _save_npz(path: Path, arrays: dict[str, Array]):
+    mx.savez(path, **arrays)
+
+
+def _save_safetensors(path: Path, arrays: dict[str, Any]):
+    save_safetensors(path, arrays)
+
+_tensor_savers = {
+    'npz': _save_npz,
+    'safetensors': _save_safetensors
+}
 
 # noinspection PyShadowingBuiltins
 def save_tensors(filename: str, arrays: dict[str, Array], format: str = None) -> None:
-    if format is None:
-        if filename.endswith('.npz'):
-            format = 'npz'
-        elif filename.endswith('.safetensors'):
-            format = 'safetensors'
-    if format == 'npz':
-        mx.savez(filename, **arrays)
-    elif format == 'safetensors':
-        save_safetensors(filename, arrays)
+    path = Path(filename)
+    if format is None: format = path.suffix[1:]
+    if saver := _tensor_savers.get(format):
+        saver(path, arrays)
     else:
         raise ValueError(f'Unknown format {format}')

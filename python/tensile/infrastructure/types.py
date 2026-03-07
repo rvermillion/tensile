@@ -5,9 +5,15 @@ import sys
 from enum import Enum
 import types, typing
 from types import (NoneType, GenericAlias, MemberDescriptorType, UnionType)
-from typing import (AbstractSet, Annotated, Annotated, Any, Callable, ClassVar, Collection, ForwardRef, Generic,
-                    Iterable, Iterator,
-                    Mapping, MutableSequence, Optional, Protocol, Self, Sequence, TYPE_CHECKING, TypeVar,
+from collections.abc import (
+    Callable, Collection, Iterable, Iterator,
+    Mapping, MutableMapping,
+    Sequence, MutableSequence,
+    Set, MutableSet,
+)
+
+from typing import (AbstractSet, Annotated, Annotated, Any, ClassVar, ForwardRef, Generic,
+                    Optional, Protocol, Self, TYPE_CHECKING, TypeVar,
                     Union, get_args, get_origin)
 
 _sysver = sys.version_info[:2]
@@ -15,6 +21,7 @@ _sysver = sys.version_info[:2]
 C = TypeVar('C', bound=Callable)
 T = TypeVar('T')
 U = TypeVar('U', contravariant=True)
+V = TypeVar('V', contravariant=True)
 X = TypeVar('X')
 Y = TypeVar('Y', covariant=True)
 
@@ -26,12 +33,15 @@ Setter = Callable[[T, X], None]
 Deleter = Callable[[T], None]
 Coercer = Callable[[T, Any], Y]
 Initter = Callable[[T, 'Spec'], None]
-
-Predicate = Callable[[T], bool]
-Transform = Callable[[U], X]
 IsSetter = Callable[[T], bool]
 
-Equiv = Callable[[X, X], bool]
+Predicate = Callable[[U], bool]
+Transform = Callable[[U], X]
+
+Relation = Callable[[U, V], bool]
+Comparison = Relation[U, U]
+
+Equiv = Relation[U, U]
 
 
 class Scope(Enum):
@@ -57,11 +67,18 @@ class Visibility(Enum):
 
 class Missing:
 
+    __slots__ = ('name',)
+
+    name: str
+
+    def __init__(self, name: str):
+        self.name = name
+
     def __repr__(self) -> str:
-        return 'missing'
+        return self.name
 
 
-missing = Missing()
+missing = Missing('missing')
 
 
 class MetaError(RuntimeError):
@@ -154,11 +171,14 @@ def is_forward_ref(obj: Any) -> bool:
 def get_forward_ref_name(obj: Any) -> str:
     return obj.__forward_arg__
 
+
+class SupportsGetItem(Protocol[U, X]):
+
+    def __getitem__(self, item: U) -> X: ...
+
+
 # __all__ = [
-#     'NoneType',
-#     'MemberDescriptorType',
-#     'Mapping',
-#     'Sequence'
-#     'Spec',
-#     'is_protocol'
+#     'AbstractSet',
+#     'Set',
+#     'MutableSet',
 # ]

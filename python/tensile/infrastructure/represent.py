@@ -70,7 +70,7 @@ class Representable:
 
     def __format__(self, format_spec):
         if format_spec == '':
-            return self.__repr__()
+            return self.__str__()
         if format_spec == 's':
             return self._repr(short=True)
         if format_spec[0] in '0123456789':
