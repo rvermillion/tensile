@@ -91,6 +91,7 @@ from mlx.core import (
     clip, pi,
     addmm,
     isinf, isnan, isfinite,
+    add, subtract, multiply, divide, power as pow,
     matmul,
     minimum, maximum, clip,
     argmin, argmax, argpartition, argsort,
@@ -280,6 +281,7 @@ _tensor_loaders = {
 }
 
 
+# noinspection PyShadowingBuiltins
 def load_tensors(filename: str|Path, format: str = None) -> dict[str, Array]:
     path = Path(filename)
     if format is None: format = path.suffix[1:]
@@ -301,10 +303,11 @@ _tensor_savers = {
 }
 
 # noinspection PyShadowingBuiltins
-def save_tensors(filename: str, arrays: dict[str, Array], format: str = None) -> None:
-    path = Path(filename)
+def save_tensors(path: str | Path, arrays: dict[str, Array], format: str = None) -> None:
+    if not isinstance(path, Path):
+        path = Path(path)
     if format is None: format = path.suffix[1:]
     if saver := _tensor_savers.get(format):
         saver(path, arrays)
     else:
-        raise ValueError(f'Unknown format {format}')
+        raise ValueError(f'Unknown format {format!r}')

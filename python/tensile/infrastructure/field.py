@@ -1045,18 +1045,24 @@ class Field(RootObject):
 
     def build_lazy(self, spec: Spec) -> Optional[Getter]:
         lazy = spec.get('lazy')
-        if isinstance(lazy, str):
-            lazy = method_getter(method=lazy)
-        else:
-            lazy = build_lazy(name=self.name, check_cls=self.owner.cls)
+        if lazy is None or lazy:
+            if isinstance(lazy, str):
+                lazy = method_getter(method=lazy)
+            elif callable(lazy):
+                pass
+            else:
+                lazy = build_lazy(name=self.name, check_cls=self.owner.cls)
         return lazy
 
     def build_changed(self, spec: Spec) -> Optional[Setter]:
         changed = spec.get('changed')
-        if isinstance(changed, str):
-            changed = method_setter(method=changed)
-        else:
-            changed = build_changed(name=self.name, check_cls=self.owner.cls)
+        if changed is None or changed:
+            if isinstance(changed, str):
+                changed = method_setter(method=changed)
+            elif callable(changed):
+                pass
+            else:
+                changed = build_changed(name=self.name, check_cls=self.owner.cls)
         return changed
 
     def build_changing(self, spec: Spec) -> Optional[Setter]:

@@ -315,7 +315,18 @@ class Meta(UpdateableObject):
             return sub
         return decorator
 
-    def provide(self, *kinds, spread: bool = False) -> Callable[[T], T]:
+    def provide_singleton(self, *kinds: str) -> Callable[[T], T]:
+        reg = self.get_registry()
+
+        def decorator(obj: T) -> T:
+            for kind in kinds:
+                reg.debug('register({}): register singleton for kind [{}] as {!r}',
+                          class_qname(self.cls), kind, obj)
+                reg.register_object(reg.get_key(kind=kind), obj)
+            return obj
+        return decorator
+
+    def provide(self, *kinds: str, spread: bool = False) -> Callable[[T], T]:
         reg = self.get_registry()
 
         if kinds:
@@ -627,6 +638,11 @@ def for_qname(qname: str) -> Optional[Meta]:
 def provides(cls: type, *kinds, spread: bool = False) -> Callable[[T], T]:
     meta = Meta.for_class(cls, build=True)
     return meta.provide(*kinds, spread=spread)
+
+
+def provides_singleton(cls: type, *kinds) -> Callable[[T], T]:
+    meta = Meta.for_class(cls, build=True)
+    return meta.provide_singleton(*kinds)
 
 
 def provides_from_type(cls: type, *types, spread: bool = False) -> Callable[[T], T]:

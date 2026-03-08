@@ -89,6 +89,7 @@ from torch import (
     pi,
     addmm,
     isinf, isnan, isfinite,
+    add, subtract, multiply, divide, pow,
     matmul,
     minimum, clip,
     argmin, argmax,

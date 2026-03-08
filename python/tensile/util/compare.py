@@ -1,5 +1,6 @@
 #  Copyright (c) 2026. Richard Vermillion. All Rights Reserved.
 import json
+import math
 import re
 from pathlib import Path
 from typing import Annotated, Any, Self
@@ -25,7 +26,7 @@ def default_ignore_key(key: str) -> bool:
 
 class Comparison(Object):
 
-    __slots__ = ('left', 'right', 'lname', 'rname', 'eps', 'ignore_key', 'ignore_file', 'ignore_path')
+    __slots__ = ('left', 'right', 'lname', 'rname', 'eps', 'ignore_key', 'ignore_file', 'ignore_path', 'skip_same')
 
     left: Annotated[Path, field()]
     right: Annotated[Path, field()]
@@ -35,6 +36,7 @@ class Comparison(Object):
     ignore_key: Annotated[Predicate[str], field(default=default_ignore_key)]
     ignore_file: Annotated[Predicate[str], field(default=Predicates.never)]
     ignore_path: Annotated[Predicate[str], field(default=Predicates.never)]
+    skip_same: Annotated[bool, field(default=True)]
 
     def _lazy_lname(self):
         return str(self.left)
@@ -46,12 +48,18 @@ class Comparison(Object):
         if left.shape != right.shape:
             return f"{self.lname}.shape != {self.rname}.shape: {left.shape} != {right.shape}"
         if ten.allclose(left, right):
-            return None
+            return None if self.skip_same else "all close"
         else:
+            def check_stats(x):
+                stats = get_stats(x)
+                for k, v in stats.items():
+                    if v == math.inf:
+                        return stats
+                return stats
             return {
-                self.lname: get_stats(left),
-                self.rname: get_stats(right),
-                'delta': get_stats(left-right)
+                self.lname: check_stats(left),
+                self.rname: check_stats(right),
+                'delta': check_stats(left-right)
             }
 
     def compare_float(self, left: float, right: float, path: str) -> CompareResult:
@@ -64,7 +72,7 @@ class Comparison(Object):
                 'delta': delta,
                 # 'eps': self.eps,
             }
-        return None
+        return None if self.skip_same else f'{self.lname} - {self.rname} = {delta}'
 
     def compare_any(self, left: Any, right: Any, path: str, key_prefix: str = '.') -> CompareResult:
         if left is None:
@@ -84,7 +92,7 @@ class Comparison(Object):
                 return self.compare_float(left, right, path)
 
         if left == right:
-            return None
+            return None if self.skip_same else f'{self.lname} == {self.rname}'
         return f"{self.lname} is not equal to {self.rname}: {left} != {right}"
 
     def compare_dict(self, left: dict[str, Any], right: dict[str, Any], path: str, key_prefix: str = '.') -> CompareResult:
@@ -181,7 +189,9 @@ class Comparison(Object):
         return self.compare_path(self.left, self.right, path)
 
     @classmethod
-    def build(cls, left: Path, right: Path, lname: str, rname: str, eps: float = default_eps,
+    def build(cls, left: str|Path, right: str|Path,
+              lname: str = None, rname: str = None,
+              eps: float = default_eps,
               ignore_key: Predicate[str] = None,
               ignore_keys: set[str] = None,
               ignore_key_pattern: str = None,
@@ -191,7 +201,13 @@ class Comparison(Object):
               ignore_path: Predicate[str] = None,
               ignore_paths: set[str] = None,
               ignore_path_pattern: str = None,
+              skip_same: bool = True,
               ) -> Self:
+
+        if isinstance(left, str): left = Path(left)
+        if isinstance(right, str): right = Path(right)
+        if lname is None: lname = str(left)
+        if rname is None: rname = str(right)
 
         ignore_key = compose_predicate(ignore_key, ignore_keys, ignore_key_pattern)
 
@@ -200,7 +216,7 @@ class Comparison(Object):
         ignore_path = compose_predicate(ignore_path, ignore_paths, ignore_path_pattern)
 
         return cls(left=left, right=right, lname=lname, rname=rname, eps=eps,
-                   ignore_key=ignore_key, ignore_file=ignore_file, ignore_path=ignore_path)
+                   ignore_key=ignore_key, ignore_file=ignore_file, ignore_path=ignore_path, skip_same=skip_same,)
 
 
 def compose_predicate(ignore_key: Predicate[str] = None, ignore_keys: set[str] = None, ignore_pattern: str = None) -> Predicate[str]:

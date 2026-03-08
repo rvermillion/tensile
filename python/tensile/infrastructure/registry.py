@@ -147,6 +147,9 @@ class Registry(RootObject, Generic[T]):
 
             self.put_factory(singleton_factory, key=key)
 
+    def get_key(self, *, key: str = None, kind: str = None, from_type: str|type = None) -> str:
+        return factory_key(key=key, kind=kind, from_type=from_type, default_kind=self.default_kind)
+
     def get_factory(self, *, key: str = None, kind: str = None, from_type: str|type = None) -> Optional[Factory[T]]:
         key = factory_key(key=key, kind=kind, from_type=from_type, default_kind=self.default_kind)
         factory = self.peek_factory(key)

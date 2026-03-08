@@ -14,7 +14,7 @@ ScalarStat = Callable[[ten.Array], ten.Scalar]
 
 def make_scalar_stat(stat: Callable[..., ten.ArrayOrScalar], *args, **kwargs) -> ScalarStat:
     def stat_fn(x: ten.Array, *args, **kwargs) -> ten.Scalar:
-        return stat(x).item()
+        return stat(ten.as_type(x, ten.float32)).item()
     return stat_fn
 
 
