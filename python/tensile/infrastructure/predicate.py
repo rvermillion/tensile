@@ -1,17 +1,22 @@
 #  Copyright (c) 2025. Richard Vermillion. All Rights Reserved.
 
-from typing import Any, Callable, Container, Generic, Iterable, Mapping, Sequence, TypeVar
+from typing import Any, Callable, Container, Generic, Iterable, Mapping, Optional, Sequence, TypeVar
 import re
 import operator as op
 from builtins import all as ball, any as bany
 
-from .types import Comparison, Predicate, Transform, missing
+import tensile.infrastructure as infra
+
+from .types import Comparison, Predicate, Transform, TYPE_CHECKING, missing
 from .meta import provides
-from .util import class_qname, name_function
+from .util import class_qname, name_function, tie_call
 
 X = TypeVar('X')
 U = TypeVar('U', contravariant=True)
 P = TypeVar('P', bound=Predicate)
+
+if TYPE_CHECKING:
+    from .transform import TransformObject
 
 # noinspection PyUnusedLocal
 def always(value: Any) -> bool:
@@ -39,10 +44,22 @@ def is_false(value: Any) -> bool:
     return not bool(value)
 
 
-def is_instance(cls: type) -> Predicate:
-    def pred(value) -> bool:
-        return isinstance(value, cls)
-    return name_function(pred, f'is_instance[{class_qname(cls)}]')
+def is_instance(cls: type|tuple[type, ...]) -> Predicate:
+    if isinstance(cls, tuple):
+        if len(cls) == 0: return never
+        if len(cls) == 1:
+            cls = cls[0]
+        else:
+            def pred(value) -> bool:
+                return isinstance(value, cls)
+            return name_function(pred, f'is_instance[{tuple(map(class_qname, cls))}]')
+    if isinstance(cls, type):
+        def pred(value) -> bool:
+            return isinstance(value, cls)
+        return name_function(pred, f'is_instance[{class_qname(cls)}]')
+    else:
+        raise TypeError(f"Invalid class: {cls}")
+
 
 
 def starts_with(prefix: str) -> Predicate[str]:
@@ -269,6 +286,10 @@ class PredicateObject(Generic[U]):
         return self.evaluate is never
 
     @property
+    def is_constant(self) -> bool:
+        return self.is_always or self.is_never
+
+    @property
     def __name__(self) -> str:
         return self.evaluate.__name__
 
@@ -381,12 +402,7 @@ class PredicateObject(Generic[U]):
         return 'Predicate(' + self.describe('x') + ')'
 
 
-# def coerce(evaluate: Optional[Predicate[U]]) -> PredicateObject[U]:
-#     if evaluate is always or evaluate is None: return Predicates.always
-#     if evaluate is never: return Predicates.never
-#     if isinstance(evaluate, PredicateObject): return evaluate
-#     if callable(evaluate): return PredicateObject(evaluate)
-#     raise ValueError(f"Invalid predicate function: {evaluate}")
+tie_call(PredicateObject, 'evaluate')
 
 
 def all_factory(predicates: Iterable[Any]) -> PredicateObject:
@@ -438,6 +454,7 @@ class AlwaysPredicate(PredicateObject[Any]):
 
     is_always = True
     is_never = False
+    is_constant = True
 
 
 class NeverPredicate(PredicateObject[Any]):
@@ -471,6 +488,7 @@ class NeverPredicate(PredicateObject[Any]):
 
     is_always = False
     is_never = True
+    is_constant = True
 
 
 class IsTruePredicate(PredicateObject[Any]):
@@ -680,9 +698,9 @@ class AnyPredicate(PredicateObject[U]):
 
     predicates: tuple[PredicateObject[U], ...]
 
-    def __init__(self, predicates: Iterable[PredicateObject[U]]):
+    def __init__(self, predicates: Iterable[PredicateObject[U]], evaluate: Predicate[U] = None):
         predicates = tuple(predicates)
-        evaluate = _combine_any(predicates)
+        if evaluate is None: evaluate = _combine_any(predicates)
         super().__init__(evaluate)
         self.predicates = predicates
 
@@ -762,9 +780,16 @@ class XorPredicate(PredicateObject[U]):
 
     def __init__(self, left: PredicateObject[U], right: PredicateObject[U]):
         if left.denies(right) or right.denies(left):
-            evaluate = always
-        elif left.implies(right) or right.implies(left):
-            evaluate = never
+            evaluate = any(left, right)
+        elif left.implies(right):
+            if right.implies(left):
+                evaluate = never
+            else:
+                # xor is true only when left=False and right=True
+                evaluate = all(left.not_evaluate, right.evaluate)
+        elif right.implies(left):
+            # xor is true only when right=False and left=True
+            evaluate = all(right.not_evaluate, left.evaluate)
         else:
             evaluate = xor(left.evaluate, right.evaluate)
         super().__init__(evaluate)
@@ -865,12 +890,13 @@ denials: dict[tuple[Comparison, Comparison], Comparison] = {
 
 class ComparePredicate(PredicateObject[U]):
 
-    __slots__ = ('compare', 'arg')
+    __slots__ = ('compare', 'arg', 'inverse')
 
     compare: Comparison[U]
     arg: U
+    inverse: Optional['ComparePredicate[U]']
 
-    def __init__(self, compare: Comparison[U], arg: U):
+    def __init__(self, compare: Comparison[U], arg: U, inverse: Optional['ComparePredicate[U]'] = None):
         if compare not in compare_symbols:
             raise ValueError(f"Invalid comparison operator: {compare}")
         def evaluate(value: U) -> bool:
@@ -879,12 +905,12 @@ class ComparePredicate(PredicateObject[U]):
         super().__init__(evaluate)
         self.compare = compare
         self.arg = arg
-        super().__init__(evaluate)
-        self.compare = compare
-        self.arg = arg
+        self.inverse = inverse
 
     @property
     def not_evaluate(self) -> Predicate[U]:
+        if inverse := self.inverse:
+            return inverse.evaluate
         compare = inverses[self.compare]
         arg = self.arg
         def evaluate(value: U) -> bool:
@@ -906,8 +932,15 @@ class ComparePredicate(PredicateObject[U]):
     def _same_is_denied_by(self, other: 'ComparePredicate[U]') -> bool:
         return denials.get((other.compare, self.compare), never_comparison)(other.arg, self.arg)
 
+    def __invert__(self) -> 'PredicateObject[U]':
+        if short_circuit_not:
+            if inverse := self.inverse: return inverse
+        return ComparePredicate(inverses[self.compare], self.arg, self)
+
     def describe(self, arg: str) -> str:
-        return f'({arg} {compare_symbols[self.compare]} {self.arg})'
+        if inverse := self.inverse:
+            return f'~{inverse.describe(arg)}'
+        return f'({arg} {compare_symbols[self.compare]} {self.arg!r})'
 
 
 class AttrPredicate(PredicateObject[U]):
@@ -961,7 +994,7 @@ class AttrPredicate(PredicateObject[U]):
         )
 
     def describe(self, arg: str) -> str:
-        return self.describe(f'{arg}.{self.name}')
+        return self.predicate.describe(f'{arg}.{self.name}')
 
 
 class KeyPredicate(PredicateObject[U]):
@@ -1022,11 +1055,11 @@ class TransformPredicate(PredicateObject[U]):
 
     __slots__ = ('transform', 'predicate')
 
-    transform: Transform[U, Any]
+    transform: 'TransformObject[U, Any]'
     predicate: PredicateObject[Any]
 
-    def __init__(self, txf: Transform[U, X], predicate: PredicateObject[X]):
-        super().__init__(transform(txf, predicate.evaluate))
+    def __init__(self, txf: 'TransformObject[U, X]', predicate: PredicateObject[X]):
+        super().__init__(transform(txf.transform, predicate.evaluate))
         self.transform = txf
         self.predicate = predicate
 
@@ -1062,8 +1095,34 @@ class TransformPredicate(PredicateObject[U]):
         )
 
     def describe(self, arg: str) -> str:
-        return self.predicate.describe(f'{self.transform.__name__}({arg})')
+        return self.predicate.describe(self.transform.describe(arg))
 
+
+class IsInstanceOfAnyPredicate(AnyPredicate[Any]):
+
+    __slots__ = ('cls',)
+
+    cls: tuple[type, ...]
+
+    def __init__(self, cls: tuple[type, ...]):
+        predicates = tuple(IsInstancePredicate(c) for c in cls)
+        super().__init__(predicates, is_instance(cls))
+        self.cls = cls
+
+    def _eq_tuple(self) -> tuple:
+        return self.cls,
+
+    def _same_implies(self, other: 'IsInstancePredicate',) -> bool:
+        return ball(issubclass(cls, other.cls) for cls in self.cls)
+
+    def _is_implied_by(self, other: PredicateObject[U], reverse: bool) -> bool:
+        return super()._is_implied_by(other, reverse) or (
+            isinstance(other, IsInstancePredicate) and
+            issubclass(other.cls, self.cls)
+        )
+
+    def describe(self, arg: str) -> str:
+        return f'isinstance({arg}, ({", ".join(map(class_qname, self.cls))}))'
 
 
 class IsInstancePredicate(PredicateObject[Any]):
@@ -1147,7 +1206,7 @@ class Predicates:
 
     @staticmethod
     def transform(txf: Transform[U, X], predicate: Predicate[X]) -> PredicateObject[U]:
-        return TransformPredicate(txf, coerce(predicate))
+        return TransformPredicate(infra.Transforms.coerce(txf), coerce(predicate))
 
     @staticmethod
     def contains(s: str) -> PredicateObject[str]:
@@ -1183,8 +1242,14 @@ class Predicates:
         return KeyPredicate(name, coerce(pred), if_missing)
 
     @staticmethod
-    def is_instance(cls: type) -> PredicateObject:
-        return IsInstancePredicate(cls)
+    def is_instance(*classes: type) -> PredicateObject:
+        if len(classes) == 1:
+            cls = classes[0]
+            if isinstance(cls, type):
+                return IsInstancePredicate(cls)
+        if len(classes) == 0:
+            return Predicates.never
+        return IsInstanceOfAnyPredicate(classes)
 
     coerce = staticmethod(coerce)
 
@@ -1315,8 +1380,8 @@ def test():
 # test()
 
 __all__ = [
-    'Predicate',
     'Predicates',
+    'PredicateObject',
     'always',
     'contains',
     'ends_with',
