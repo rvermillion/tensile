@@ -4,7 +4,8 @@ from pathlib import Path
 from typing import Any, Callable, Sequence, TypeAlias, TypeGuard, TypeVar, Union
 
 import torch
-import numpy as np
+
+import torch.nn.functional as F
 
 from .types import *
 
@@ -100,6 +101,7 @@ from torch import (
     swapaxes, transpose,
     as_strided,
     broadcast_to,
+    rsqrt,
     inf,
     all, any,
     allclose,
@@ -143,6 +145,11 @@ def require_grad(a: Array, grad: bool = True) -> Array:
     return a
 
 
+def pad(x: Array, padding: Sequence[tuple[int, int]] = None, mode: str = 'constant', constant_values: int|float|bool|Array = 0.0) -> Array:
+    assert padding[0] == (0, 0), "torch backend does not support padding the batch dimension"
+    assert padding[-1] == (0, 0), "torch backend does not support padding the channel dimension"
+    flat = [v for lo, hi in reversed(padding[1:-1]) for v in (lo, hi)]
+    return F.pad(x, flat, mode=mode, value=constant_values)
 
 
 def quantize(a: Array, group_size: int, bits: int, mode: str = 'affine') -> tuple[Array, Array, Array]:
