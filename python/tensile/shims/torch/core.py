@@ -81,7 +81,7 @@ def as_type(a: Any, dtype: DType) -> Array:
     return tensor(a, dtype=dtype)
 
 from torch import (
-    tensor,
+    tensor, dtype,
     zeros, zeros_like, ones, ones_like, full, full_like, empty, empty_like,
     arange, concatenate, reshape,
     abs, square, sqrt, exp, log, expm1, sin, cos, tan, sigmoid,

@@ -125,6 +125,14 @@ def parameter(x: Array) -> Array: return x
 
 def require_grad(a: Array, grad: bool = True) -> Array: return a
 
+def dtype(dt: str|DType) -> DType:
+    if isinstance(dt, str):
+        dt = dt.lower()
+        dt = getattr(mx, dt)
+    if isinstance(dt, DType):
+        return dt
+    raise TypeError(f"Invalid dtype: {dt}")
+
 
 softmax = mx.softmax
 # def softmax(a: ArrayLike, axis: Axes = None, keepdims: bool = False, dtype: DType = None) -> Array:
