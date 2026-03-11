@@ -2,7 +2,7 @@
 
 import tensile.infrastructure.meta as _meta
 
-from .decoder import DecoderLayer, TransformerBlock
+from .transformer import DecoderLayer, TransformerBlock
 from .dropout import Dropout
 from .embedding import Embedding
 from .mlp import MLP
