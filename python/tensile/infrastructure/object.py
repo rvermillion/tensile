@@ -1,4 +1,5 @@
 #  Copyright (c) 2025. Richard Vermillion. All Rights Reserved.
+import enum
 import json
 
 from .field import field
@@ -36,11 +37,17 @@ def noop_init(self, spec: Keywords, **kwargs):
 
 T = TypeVar('T', bound='Object')
 
-LIFECYCLE_PREINIT = 1
-LIFECYCLE_INIT = 2
-LIFECYCLE_POSTINIT = 3
-LIFECYCLE_READY = 4
-LIFECYCLE_ERROR = 100
+
+class Lifecycle(enum.Enum):
+    unknown = 0
+    preinit = 1
+    init = 2
+    postinit = 3
+    ready = 4
+    error = 100
+
+    def is_ready(self) -> bool:
+        return self is Lifecycle.ready
 
 
 class ObjectClass(type):
@@ -64,9 +71,9 @@ class ObjectClass(type):
 
 class Object(UpdateableObject, metaclass=ObjectClass):
 
-    __slots__ = ['spec']
+    __slots__ = ['_spec']
 
-    spec: Annotated[Spec, field(
+    _spec: Annotated[Spec, field(
         doc='The original spec used to create this object',
         init=False,
     )]
@@ -83,20 +90,29 @@ class Object(UpdateableObject, metaclass=ObjectClass):
     def __init__(self, spec: Keywords = None, /, **kwargs):
         spec = self._combine_spec(spec, kwargs)
         # spec = Spec.combine(spec, kwargs)
-        self.spec = spec
-        self.set_lifecycle(LIFECYCLE_PREINIT)
-        self.preinit(spec)
-        self.set_lifecycle(LIFECYCLE_INIT)
-        self.init(spec)
-        self.set_lifecycle(LIFECYCLE_POSTINIT)
-        self.postinit(spec)
-        self.set_lifecycle(LIFECYCLE_READY)
+        self._spec = spec
+        try:
+            self.set_lifecycle(Lifecycle.preinit)
+            self.preinit(spec)
+            self.set_lifecycle(Lifecycle.init)
+            self.init(spec)
+            self.set_lifecycle(Lifecycle.postinit)
+            self.postinit(spec)
+            self.set_lifecycle(Lifecycle.ready)
+        except Exception as e:
+            self.warn('Failed to initialize {} in {}: {!r}', self, self.get_lifecycle(), e)
+            self.set_lifecycle(Lifecycle.error)
+            raise e
 
+    # noinspection PyMethodMayBeStatic
     def _combine_spec(self, spec: Keywords, kwargs: Keywords) -> Spec:
         return Spec.combine(spec, kwargs)
 
-    def set_lifecycle(self, lifecycle: int):
+    def set_lifecycle(self, lifecycle: Lifecycle):
         pass
+
+    def get_lifecycle(self) -> Lifecycle:
+        return Lifecycle.unknown
 
     def preinit(self, spec: Spec):
         pass
@@ -155,7 +171,7 @@ class Object(UpdateableObject, metaclass=ObjectClass):
         return cls.coerce(spec)
 
     @classmethod
-    def create(cls, spec: Keywords = None, *rest, **kwargs) -> Self:
+    def create(cls, spec: Keywords = None, /, **kwargs) -> Self:
         return cls(spec, **kwargs)
 
     @classmethod
@@ -255,7 +271,7 @@ class Object(UpdateableObject, metaclass=ObjectClass):
         raise TypeError(f'Cannot coerce a function {spec} to {cls}')
 
     Meta: ClassVar[type[ObjectMeta]] = ObjectMeta
-
+    Lifecycle: ClassVar[type[Lifecycle]] = Lifecycle
 
 # ObjectMeta.engineer(Object)
 #

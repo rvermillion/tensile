@@ -7,7 +7,7 @@ from .root import *
 from . import field as fields
 from .field import Field, FieldType, field, private_slot
 from .registry import Registry, Factory, factory_key, meta_by_qname, meta_by_type, meta_register
-from .util import class_qname, process_specs
+from .util import class_qname, process_specs, tie_call
 
 
 if TYPE_CHECKING:
@@ -122,10 +122,14 @@ class UpdateableObject(RootObject):
             setattr(self, key, val)
 
 
+class CoerceFunction(Protocol):
+
+    def __call__(self, spec: Any = None, /, **kwargs) -> Any: ...
+
 
 class Meta(UpdateableObject):
 
-    __slots__ = ['cls', 'bases', 'children', 'registry']
+    __slots__ = ['cls', 'bases', 'children', 'registry', 'coerce']
 
     cls: type
     name: str
@@ -135,8 +139,9 @@ class Meta(UpdateableObject):
     children: list['Meta']
     fields: dict[str, Field]
     registry: Optional[Registry[Any]]
+    coerce: CoerceFunction
 
-    def __init__(self, cls: type, **kwargs):
+    def __init__(self, cls: type, coerce: CoerceFunction = None, **kwargs):
         if cls in meta_by_type:
             raise MetaError(f'Meta object already defined for {cls}')
 
@@ -144,6 +149,7 @@ class Meta(UpdateableObject):
         self.children = []
         self.bases = ()
         self.registry = None
+        self.coerce = self.default_coerce if coerce is None else coerce
 
         meta_register(self, cls=cls)
         # meta_by_type[cls] = self
@@ -165,63 +171,7 @@ class Meta(UpdateableObject):
     def instance_fields(self) -> dict[str, Field]:
         return {n: f for n, f in self.fields.items() if Scope.is_instance(f.scope)}
 
-    def add_child(self, child: 'Meta'):
-        self.children.append(child)
-
-    def has_instance(self, obj: Any) -> bool:
-        return isinstance(obj, self.cls)
-
-    def all_parents(self) -> Iterable['Meta']:
-        inherit = self.cls.mro()[:0:-1]
-        for parent in inherit:
-            if meta := Meta.for_class(parent):
-                yield meta
-
-    def all_children(self, dedupe: Union[set['Meta'], bool] = None) -> Iterable['Meta']:
-        if children := self.children:
-            if dedupe is None or dedupe is False:
-                for child in children:
-                    yield child
-                    yield from child.all_children(dedupe)
-            else:
-                if dedupe is True:
-                    dedupe = set()
-                for child in children:
-                    if child not in dedupe:
-                        dedupe.add(child)
-                        yield child
-                        yield from child.all_children(dedupe)
-
-    def get_registry(self) -> Registry[Any]:
-        registry = self.registry
-        if registry is None:
-            cls: type[Any] = self.cls
-            # noinspection PyTypeChecker
-            registry = self.registry = Registry(cls)
-        return registry
-
-    def configure_registry(self, default_kind: str = None, modules: Union[str, Sequence[str]] = None, append_kind: bool = False, **kwargs) -> Registry[Any]:
-        registry = self.get_registry()
-        registry.configure(
-            default_kind=default_kind,
-            modules=modules,
-            append_kind=append_kind,
-            **kwargs)
-        return registry
-
-    # def put_factory(self, factory: Factory[Any], *, key: str = None, kind: str = None, from_type: str = None,
-    #                 override: bool = False) -> None:
-    #     registry = self.get_registry()
-    #     registry.put_factory(factory, key=key, kind=kind, from_type=from_type, override=override)
-
-    def get_factory(self, *, key: str = None, kind: str = None, from_type: str|type = None) -> Optional[Factory[Any]]:
-        registry = self.registry
-        if registry is None:
-            # noinspection PyTypeChecker
-            return Registry.method_factory(self.cls, factory_key(key=key, kind=kind, from_type=from_type))
-        return registry.get_factory(key=key, kind=kind, from_type=from_type)
-
-    def coerce(self, spec: Any = None, /, **kwargs) -> Any:
+    def default_coerce(self, spec: Any = None, /, **kwargs) -> Any:
 
         if self.has_instance(spec):
             return spec
@@ -279,6 +229,67 @@ class Meta(UpdateableObject):
 
             if factory: return factory(spec, **kwargs)
         raise ValueError(f'Cannot coerce {spec} of kind [{kind}] to {cls}')
+
+    def get_class(self, cls: type[T]) -> Optional[type[T]]:
+        if issubclass(self.cls, cls):
+            return self.cls
+        return None
+
+    def add_child(self, child: 'Meta'):
+        self.children.append(child)
+
+    def has_instance(self, obj: Any) -> bool:
+        return isinstance(obj, self.cls)
+
+    def all_parents(self) -> Iterable['Meta']:
+        inherit = self.cls.mro()[:0:-1]
+        for parent in inherit:
+            if meta := Meta.for_class(parent):
+                yield meta
+
+    def all_children(self, dedupe: Union[set['Meta'], bool] = None) -> Iterable['Meta']:
+        if children := self.children:
+            if dedupe is None or dedupe is False:
+                for child in children:
+                    yield child
+                    yield from child.all_children(dedupe)
+            else:
+                if dedupe is True:
+                    dedupe = set()
+                for child in children:
+                    if child not in dedupe:
+                        dedupe.add(child)
+                        yield child
+                        yield from child.all_children(dedupe)
+
+    def get_registry(self) -> Registry[Any]:
+        registry = self.registry
+        if registry is None:
+            cls: type[Any] = self.cls
+            # noinspection PyTypeChecker
+            registry = self.registry = Registry(cls, self)
+        return registry
+
+    def configure_registry(self, default_kind: str = None, modules: Union[str, Sequence[str]] = None, append_kind: bool = False, **kwargs) -> Registry[Any]:
+        registry = self.get_registry()
+        registry.configure(
+            default_kind=default_kind,
+            modules=modules,
+            append_kind=append_kind,
+            **kwargs)
+        return registry
+
+    # def put_factory(self, factory: Factory[Any], *, key: str = None, kind: str = None, from_type: str = None,
+    #                 override: bool = False) -> None:
+    #     registry = self.get_registry()
+    #     registry.put_factory(factory, key=key, kind=kind, from_type=from_type, override=override)
+
+    def get_factory(self, *, key: str = None, kind: str = None, from_type: str|type = None) -> Optional[Factory[Any]]:
+        registry = self.registry
+        if registry is None:
+            # noinspection PyTypeChecker
+            return Registry.method_factory(self.cls, factory_key(key=key, kind=kind, from_type=from_type))
+        return registry.get_factory(key=key, kind=kind, from_type=from_type)
 
     def spread_spec(self, factory: Factory[T]) -> Factory[T]:
 
@@ -566,9 +577,9 @@ class ObjectMeta(Meta):
             init(this, spec)
 
     def update_instance(self, this: Any, spec: Spec):
-        fields = self.updateable_fields
+        updateable_fields = self.updateable_fields
         for name, val in spec.items():
-            if f := fields.get(name):
+            if f := updateable_fields.get(name):
                 try:
                     f.update(this, val)
                 except Exception:
@@ -606,7 +617,7 @@ class ObjectMeta(Meta):
     def _repr_args(self) -> str:
         return self.qname
 
-    def coerce(self, spec: Any = None, /, **kwargs) -> Self:
+    def default_coerce(self, spec: Any = None, /, **kwargs) -> Self:
         if self.has_instance(spec):
             return spec
 
@@ -633,6 +644,23 @@ def for_class(cls: type, build: bool = True) -> Meta:
 
 def for_qname(qname: str) -> Optional[Meta]:
     return Meta.for_qname(qname)
+
+
+def for_spec(spec: Any) -> Optional[Meta]:
+    if isinstance(spec, type):
+        return for_class(spec)
+    elif isinstance(spec, str):
+        return for_qname(spec)
+    return None
+
+
+def coerce_class(cls: str|type) -> type:
+    if isinstance(cls, str):
+        if m := meta_for_qname(cls):
+            return m.cls
+    elif isinstance(cls, type):
+        return cls
+    raise ValueError(f'Invalid class: {cls}')
 
 
 def provides(cls: type, *kinds, spread: bool = False) -> Callable[[T], T]:
@@ -679,6 +707,18 @@ def alias(module: str, classes: Sequence[str|type]) -> None:
     else:
         raise ImportError(f'Cannot find module {module}')
 
+def configure_coerce(cls: type[T], coerce: CoerceFunction) -> Meta:
+    meta = Meta.for_class(cls, build=True)
+    meta.coerce = coerce
+    return meta
+
+
+meta_configure_coerce = configure_coerce
+meta_for_class = for_class
+meta_for_qname = for_qname
+meta_for_spec = for_spec
+meta_coerce_class = coerce_class
+
 
 __all__ = [
     'Annotated',
@@ -692,6 +732,11 @@ __all__ = [
     'UpdateableObject',
     'coerce',
     'field',
+    'meta_configure_coerce',
+    'meta_for_class',
+    'meta_for_qname',
+    'meta_for_spec',
+    'meta_coerce_class',
     'provides',
     'private_slot'
 ]

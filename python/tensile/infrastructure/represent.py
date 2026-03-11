@@ -33,7 +33,10 @@ class Representable:
     __slots__ = ()
 
     def __repr__(self) -> str:
-        return self._repr()
+        try:
+            return self._repr()
+        except:
+            return object.__repr__(self)
 
     def _repr(self, **options) -> str:
         args = self._repr_args(**options)

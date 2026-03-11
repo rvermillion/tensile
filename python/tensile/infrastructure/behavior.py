@@ -1,6 +1,7 @@
 #  Copyright (c) 2025. Richard Vermillion. All Rights Reserved.
 from pathlib import Path
 
+import tensile.infrastructure as infra
 from . import log
 from .types import *
 from .util import class_qname, name_function
@@ -14,28 +15,28 @@ is_equiv: Equiv[Any]
 eq_equiv: Equiv[Any]
 
 
-none: Transform[Any, None]
+none: TransformFunction[Any, None]
 
 
-def relation_predicate(relation: Relation[T, X]) -> Predicate[tuple[T, X]]:
+def relation_predicate(relation: Relation[T, X]) -> PredicateFunction[tuple[T, X]]:
     def predicate(pair: tuple[T, X]) -> bool:
         return relation(*pair)
     return predicate
 
 
-def predicate_relation(predicate: Predicate[tuple[T, X]]) -> Relation[T, X]:
+def predicate_relation(predicate: PredicateFunction[tuple[T, X]]) -> Relation[T, X]:
     def relation(a: T, b: X) -> bool:
         return predicate((a, b))
     return relation
 
 
-def left_relation(relation: Relation[T, X], right: X) -> Predicate[T]:
+def left_relation(relation: Relation[T, X], right: X) -> PredicateFunction[T]:
     def predicate(a: T) -> bool:
         return relation(a, right)
     return predicate
 
 
-def right_relation(relation: Relation[T, X], left: T) -> Predicate[X]:
+def right_relation(relation: Relation[T, X], left: T) -> PredicateFunction[X]:
     def predicate(a: X) -> bool:
         return relation(left, a)
     return predicate
@@ -235,7 +236,7 @@ def method_coercer(method: str, *args, pass_instance: bool = False, desc: str = 
     return method_one_caller(method, *args, pass_instance=pass_instance, desc=desc)
 
 
-def transform_coercer(transform: Transform[Any, Y], desc: str = '') -> Coercer[Any, Y]:
+def transform_coercer(transform: TransformFunction[Any, Y], desc: str = '') -> Coercer[Any, Y]:
     # noinspection PyUnusedLocal
     def coerce(this: Any, value: Any) -> Y:
         return transform(value)
@@ -416,21 +417,28 @@ def coerce_type(cls: Optional[type[X]], optional: bool = False, qname: str = Non
         if coerce is None:
             if is_runtime_class(cls):
                 if getattr(cls, 'auto_coerce', False) if auto is None else auto:
-                    coerce = getattr(cls, 'coerce', None)
-                    if coerce is None:
-                        coerce = getattr(cls, '_coerce', None)
+                    meta = infra.meta.for_class(cls, build=True)
+
+                    log.warn('Using meta {} coerce for automatic coercion of {}', meta, cls)
+
+                    # noinspection PyUnusedLocal
+                    def coerce(this: Any, val: Any) -> X:
+                        return meta.coerce(val)
+
+                    # coerce = getattr(cls, 'coerce', None)
+                    # if coerce is None:
+                    #     coerce = getattr(cls, '_coerce', None)
                 if coerce is None:
                     # noinspection PyUnusedLocal
                     def coerce(this: Any, val: Any) -> X:
                         if isinstance(val, cls):
                             return val
                         raise CoerceError(f'Cannot coerce {val!r} to {cls}')
-                else:
-                    log.warn('Using class method {} for automatic coercion of {}', coerce, cls)
-                    def auto_coerce(this: Any, val: Any) -> X:
-                        # noinspection PyCallingNonCallable
-                        return coerce(val)
-                    return auto_coerce
+                # else:
+                #     def auto_coerce(this: Any, val: Any) -> X:
+                #         # noinspection PyCallingNonCallable
+                #         return coerce(val)
+                #     return auto_coerce
             else:
                 log.debug('Skipping non-runtime class:', cls)
     else:

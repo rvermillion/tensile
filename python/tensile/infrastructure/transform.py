@@ -1,30 +1,55 @@
 #  Copyright (c) 2026. Richard Vermillion. All Rights Reserved.
 from types import EllipsisType, NoneType
-from typing import Any, Generic, Iterable, Sequence, TypeVar
+from typing import Any, Generic, TYPE_CHECKING, TypeVar, final
+
+import tensile.infrastructure as infra
+
 from .function import identity, none, compose_all
-from .types import Missing, SupportsGetItem, Transform, missing
-from .util import name_function
+from .meta import meta_configure_coerce
+from .types import (Callable, Mapping, Missing, PredicateFunction, PredicateLike, Sequence, SupportsGetItem,
+                    TransformFunction, TransformLike, missing)
+from .util import name_function, spread_mapping, tie_call
+
+if TYPE_CHECKING:
+    from .predicate import Predicate, Predicates
 
 T = TypeVar('T')
 U = TypeVar('U', contravariant=True)
 X = TypeVar('X', covariant=True)
 
 
-class TransformObject(Generic[U, X]):
+class Transform(Generic[U, X]):
 
     __slots__ = ('transform',)
 
-    transform: Transform[U, X]
+    transform: TransformFunction[U, X]
 
-    def __init__(self, transform: Transform[U, X]) -> None:
+    def __init__(self, transform: TransformFunction[U, X]) -> None:
         self.transform = transform
 
     @property
     def __name__(self) -> str:
         return self.transform.__name__
 
+    @final
     def __call__(self, value: U) -> X:
         return self.transform(value)
+
+    def _eq_tuple(self) -> tuple:
+        return (self.transform,)
+
+    def __eq__(self, other: Any) -> bool:
+        return self is other or (
+            isinstance(other, self.__class__) and
+            self._eq_tuple() == other._eq_tuple()
+        )
+
+    def __hash__(self) -> int:
+        return hash(self._eq_tuple())
+
+    def __add__(self, other: TransformLike[X, T]) -> 'Transform[U, T]':
+        # noinspection PyTypeChecker
+        return Transforms.chain(self, other)
 
     def describe(self, arg: str) -> str:
         return f'{self.__name__}({arg})'
@@ -32,20 +57,40 @@ class TransformObject(Generic[U, X]):
     is_constant: bool = False
 
 
-class ConstantTransform(TransformObject[Any, X]):
+tie_call(Transform, 'transform')
+
+
+def full_coerce(self, spec: Any = None, /, **kwargs) -> Transform:
+    if spec is None:
+        spec = kwargs
+    elif kwargs and isinstance(spec, Mapping):
+        kwargs.update(spec)
+        spec = kwargs
+    return coerce(spec)
+
+
+meta_configure_coerce(Transform, full_coerce)
+# meta_configure_coerce(TransformFunction, full_coerce)
+
+
+def constant(value: T) -> TransformFunction[Any, T]:
+    if value is None:
+        return none
+
+    # noinspection PyUnusedLocal
+    def transform(arg: Any) -> X:
+        return value
+    return name_function(transform, f'constant[{value!r}]')
+
+
+class ConstantTransform(Transform[Any, X]):
 
     __slots__ = ('value', )
 
     value: X
 
     def __init__(self, value: X):
-        if value is None:
-            transform = none
-        else:
-            def transform(arg: Any) -> X:
-                return value
-            transform = name_function(transform, f'constant[{value!r}]')
-        super().__init__(transform)
+        super().__init__(constant(value))
         self.value = value
 
     def describe(self, arg: str) -> str:
@@ -54,7 +99,7 @@ class ConstantTransform(TransformObject[Any, X]):
     is_constant = True
 
 
-class IdentityTransform(TransformObject[T, T]):
+class IdentityTransform(Transform[T, T]):
 
     __slots__ = ()
 
@@ -67,7 +112,7 @@ class IdentityTransform(TransformObject[T, T]):
     is_constant = True
 
 
-def get_attr(name: str, default: Any = missing, desc: str = '') -> Transform:
+def get_attr(name: str, default: Any = missing, desc: str = '') -> TransformFunction:
     if default is missing:
         def getter(this: Any) -> Any:
             return getattr(this, name)
@@ -81,7 +126,7 @@ def get_attr(name: str, default: Any = missing, desc: str = '') -> Transform:
     return name_function(getter, desc)
 
 
-def get_item(item: Any, default: Any = missing, desc: str = '') -> Transform[SupportsGetItem, Any]:
+def get_item(item: Any, default: Any = missing, desc: str = '') -> TransformFunction[SupportsGetItem, Any]:
     if default is missing:
         def getter(this: Any) -> Any:
             return this[item]
@@ -99,7 +144,7 @@ def get_item(item: Any, default: Any = missing, desc: str = '') -> Transform[Sup
 
 
 
-class AttrTransform(TransformObject[T, T]):
+class AttrTransform(Transform[Any, T]):
 
     __slots__ = ('name', 'default')
 
@@ -115,7 +160,7 @@ class AttrTransform(TransformObject[T, T]):
         return f'{arg}.{self.name}' if self.default is missing else f'getattr({arg}, {self.name!r}, {self.default!r})'
 
 
-class ItemTransform(TransformObject[T, T]):
+class ItemTransform(Transform[T, T]):
 
     __slots__ = ('item', 'default')
 
@@ -131,7 +176,7 @@ class ItemTransform(TransformObject[T, T]):
         return f'{arg}[{self.item!r}]' if self.default is missing else f'{arg}.get({self.item!r}, {self.default!r})'
 
 
-def _combine_compose(txfs: Sequence[TransformObject[U, X]]) -> Transform[U, X]:
+def _combine_chain(txfs: Sequence[Transform[U, X]]) -> TransformFunction[U, X]:
     transforms = []
     for i, this in enumerate(txfs):
         if this.is_constant:
@@ -140,14 +185,14 @@ def _combine_compose(txfs: Sequence[TransformObject[U, X]]) -> Transform[U, X]:
     return compose_all(transforms)
 
 
-class ComposedTransform(TransformObject[Any, Any]):
+class ChainedTransform(Transform[Any, Any]):
 
     __slots__ = ('transforms', )
 
-    transforms: tuple[TransformObject[Any, Any], ...]
+    transforms: tuple[Transform[Any, Any], ...]
 
-    def __init__(self, transforms: tuple[TransformObject[Any, Any], ...]) -> None:
-        super().__init__(_combine_compose(transforms))
+    def __init__(self, transforms: tuple[Transform[Any, Any], ...]) -> None:
+        super().__init__(_combine_chain(transforms))
         self.transforms = transforms
 
     def describe(self, arg: str) -> str:
@@ -156,51 +201,132 @@ class ComposedTransform(TransformObject[Any, Any]):
         return arg
 
 
+def where(condition: PredicateFunction[T], then: TransformFunction[T, X], otherwise: TransformFunction[T, X] = None) -> TransformFunction[T, X]:
+    from .predicate import always, never
+    if otherwise is None: otherwise = identity
+    if condition is always: return then
+    if condition is never: return otherwise
+    if then is otherwise: return then
+
+    def transform(arg: T) -> Any:
+        return then(arg) if condition(arg) else otherwise(arg)
+
+    return name_function(transform, f'where[{condition.__name__} ? {then.__name__} : {otherwise.__name__}]')
+
+
+class ConditionalTransform(Transform[U, X]):
+
+    __slots__ = ('condition', 'then', 'otherwise')
+
+    condition: 'Predicate[U]'
+    then: Transform[U, X]
+    otherwise: Transform[U, X]
+
+    def __init__(self, condition: 'Predicate[U]', then: Transform[U, X], otherwise: Transform[U, X]):
+        super().__init__(where(condition.evaluate, then.transform, otherwise.transform))
+        self.condition = condition
+        self.then = then
+        self.otherwise = otherwise
+
+    def describe(self, arg: str) -> str:
+        return self.condition.describe(arg) + ' ? ' + self.then.describe(arg) + ' : ' + self.otherwise.describe(arg)
+
+
+def coerce(spec: TransformLike[U, X]) -> Transform[Any, Any]:
+    if isinstance(spec, Transform): return spec
+    if spec is None or spec is identity: return Transforms.identity
+    if callable(spec): return Transform(spec)
+    if isinstance(spec, Mapping):
+        if len(spec) == 1:
+            k, = spec.keys()
+            if k != 'kind':
+                value = spec[k]
+                if factory := named_factories.get(k):
+                    return factory(value)
+                raise ValueError(f"Invalid key: {k!r}")
+    if isinstance(spec, str):
+        if singleton := named_singletons.get(spec):
+            return singleton
+        if factory := named_factories.get(spec):
+            return factory(None)
+        raise ValueError(f"Invalid string spec: {spec!r}")
+    if isinstance(spec, Sequence):
+        return Transforms.chain(*spec)
+    raise ValueError(f"Cannot convert {spec!r} to a valid type or spec: {type(spec)}")
+
+
 class Transforms:
 
     __slots__ = ()
 
     @staticmethod
-    def constant(value: T) -> TransformObject[Any, T]:
+    def constant(value: T) -> Transform[Any, T]:
         return Transforms.none if value is None else ConstantTransform(value)
 
     @staticmethod
-    def get_attr(name: str, default: Missing|T = missing) -> TransformObject[Any, T]:
+    def get_attr(name: str, default: Missing|T = missing) -> Transform[Any, T]:
         return AttrTransform(name, default)
 
     @staticmethod
-    def get_item(item: T, default: Missing | X = missing) -> TransformObject[SupportsGetItem[T, X], X]:
+    def get_path(path: str, default: Missing|T = missing) -> Transform[Any, T]:
+        return Transforms.chain(*(Transforms.get_attr(name, default=default) for name in path.split('.')))
+
+    @staticmethod
+    def get_item(item: T, default: Missing | X = missing) -> Transform[SupportsGetItem[T, X], X]:
         return ItemTransform(item, default)
 
     @staticmethod
-    def compose(*transforms: TransformObject[Any, Any]) -> Transform[Any, Any]:
-        return ComposedTransform(tuple(Transforms.coerce(t) for t in transforms))
+    def chain(*transforms: TransformLike[Any, Any]) -> Transform[Any, Any]:
+        return ChainedTransform(tuple(coerce(t) for t in transforms))
+
+    coerce = staticmethod(coerce)
 
     @staticmethod
-    def coerce(spec: Any) -> TransformObject[Any, Any]:
-        if spec is None: return Transforms.identity
-        if isinstance(spec, TransformObject): return spec
-        if callable(spec): return TransformObject(spec)
-        raise ValueError(f"Cannot convert {spec!r} to a valid type or spec: {type(spec)}")
+    def append(suffix: str) -> Transform[str, str]:
+        return Transform(lambda x: x + suffix)
 
     @staticmethod
-    def append(suffix: str) -> TransformObject[str, str]:
-        return TransformObject(lambda x: x + suffix)
+    def prepend(prefix: str) -> Transform[str, str]:
+        return Transform(lambda x: prefix + x)
 
     @staticmethod
-    def prepend(prefix: str) -> TransformObject[str, str]:
-        return TransformObject(lambda x: prefix + x)
+    def where(condition: PredicateLike[T], then: TransformLike[T, X], otherwise: TransformLike[T, X] = None) -> Transform[T, X]:
+        return ConditionalTransform(infra.Predicates.coerce(condition), coerce(then), coerce(otherwise))
 
-    none: TransformObject[Any, NoneType] = ConstantTransform(None)
-    ellipsis: TransformObject[Any, EllipsisType] = ConstantTransform(Ellipsis)
-    true: TransformObject[Any, bool] = ConstantTransform(True)
-    false: TransformObject[Any, bool] = ConstantTransform(False)
-    identity: TransformObject[Any, Any] = IdentityTransform()
-    repr: TransformObject[Any, str] = TransformObject(repr)
-    str: TransformObject[Any, str] = TransformObject(str)
-    int: TransformObject[Any, int] = TransformObject(int)
-    float: TransformObject[Any, float] = TransformObject(float)
+    @staticmethod
+    def transform(transform: TransformLike[U, X]) -> Transform[U, X]:
+        return coerce(transform)
 
-    __all__ = [
+    @staticmethod
+    def named(name: str) -> Transform:
+        t = getattr(Transforms, name)
+        if isinstance(t, Transform):
+            return t
+        raise ValueError(f"Invalid transform name: {name}")
+
+    none: Transform[Any, NoneType] = ConstantTransform(None)
+    ellipsis: Transform[Any, EllipsisType] = ConstantTransform(Ellipsis)
+    true: Transform[Any, bool] = ConstantTransform(True)
+    false: Transform[Any, bool] = ConstantTransform(False)
+    identity: Transform[Any, Any] = IdentityTransform()
+    repr: Transform[Any, str] = Transform(repr)
+    str: Transform[Any, str] = Transform(str)
+    int: Transform[Any, int] = Transform(int)
+    float: Transform[Any, float] = Transform(float)
+
+
+named_factories: dict[str, Callable[[Any], Transform]] = {
+    'none': Transforms.none,
+    'attr': Transforms.get_attr,
+    'key': Transforms.get_item,
+}
+
+named_singletons: dict[str, Transform] = {
+    name: txf for name, txf in Transforms.__dict__.items() if isinstance(txf, Transform)
+}
+
+
+__all__ = [
+    'Transform',
     'Transforms',
 ]

@@ -3,7 +3,7 @@
 
 from .behavior import *
 from .root import *
-from .util import class_qname
+from .util import StringBuffer, class_qname
 from .registry import add_qname_listener, meta_by_qname
 
 
@@ -231,12 +231,18 @@ class FieldType(RootObject):
                     qname = class_qname(origin)
                 elif issubclass(origin, Callable):
                     if raw_args := get_args(anno):
-                        params, ret = raw_args
-                        arg_list = [FieldType.from_anno(params, owner)] if params is ... else [FieldType.from_anno(arg, owner) for arg in params]
-                        arg_list.append(FieldType.from_anno(ret, owner))
-                        args = tuple(arg_list)
+                        if origin is Callable:
+                            if len(raw_args) == 2:
+                                params, ret = raw_args
+                                arg_list = [FieldType.from_anno(params, owner)] if params is ... else [FieldType.from_anno(arg, owner) for arg in params]
+                                arg_list.append(FieldType.from_anno(ret, owner))
+                                args = tuple(arg_list)
+                                impl = CallableFieldType
+                            else:
+                                raise MetaError(f'Callable annotation must have two args: {anno!r}')
+                        else:
+                            args = tuple(FieldType.from_anno(arg, owner) for arg in get_args(anno))
                     qname = class_qname(origin)
-                    impl = CallableFieldType
                 elif issubclass(origin, Collection):
                     args = tuple(FieldType.from_anno(arg, owner) for arg in get_args(anno))
                     impl = CollectionFieldType
@@ -875,6 +881,21 @@ def method_builders(*names: str) -> dict[str, Callable[['Field', Spec], Any]]:
 building: set[str] = set()
 
 
+class FieldProperty(property):
+
+    __slots__ = ('field',)
+
+    field: 'Field'
+
+    # noinspection PyShadowingNames
+    def __init__(self, field: 'Field'):
+        self.field = field
+        super().__init__(field.get, field.set, field.delete, field.doc)
+
+    def __repr__(self):
+        return f'<field {self.field.describe(True)}>'
+
+
 class Field(RootObject):
 
     __slots__ = ['owner', 'name', 'spec', 'type', 'aliases', 'slot',
@@ -882,7 +903,9 @@ class Field(RootObject):
                  'set', 'delete', 'init', 'init_order', 'is_set', 'update',
                  'default', 'default_factory', 'required', 'readonly',
                  'doc', 'scope', 'member', 'visibility', 'delegate',
-                 'changing', 'changed']
+                 'changing', 'changed', 'options']
+
+    slots: ClassVar[set[str]] = set(__slots__)
 
     owner: 'Meta'
     name: str
@@ -913,6 +936,7 @@ class Field(RootObject):
     readonly: bool
     scope: Scope
     visibility: Visibility
+    options: Optional[dict[str, Any]]
 
     def __init__(self, owner: 'Meta', name: str, spec: Spec):
         self.owner = owner
@@ -920,19 +944,14 @@ class Field(RootObject):
         self.spec = spec
 
         self.type = spec.pop('type', None)
+        options = {}
+        for k, v in spec.items():
+            if k not in self.slots:
+                options[k] = v
+        self.options = options if options else None
 
-        # for key, val in spec.items():
-        #     setattr(self, key, self.preprocess(key, val))
-
-        # for key, builder in self.attr_builders.items():
-        #     if key in spec:
-        #         pass
-        #     else:
-        #         val = builder(self, spec)
-        #         setattr(self, key, val)
-
-    # def __init_subclass__(cls, **kwargs):
-    #     super().__init_subclass__()
+    def get_option(self, key: str, default: Any = None) -> Any:
+        return self.options.get(key, default) if self.options else default
 
     @property
     def qname(self) -> str:
@@ -1001,7 +1020,8 @@ class Field(RootObject):
 
     def build_property(self, cls: builtins.type) -> Optional[property]:
         if self.needs_property():
-            return property(self.get, self.set, self.delete, self.doc)
+            return FieldProperty(self)
+            # return property(self.get, self.set, self.delete, self.doc)
         return None
 
     def engineer(self, meta: 'Meta' = None) -> None:
@@ -1034,11 +1054,31 @@ class Field(RootObject):
     def new_spec(cls, **kwargs) -> Spec:
         return Spec(**kwargs) if kwargs else Spec()
 
-    def describe(self) -> str:
-        s = f'{self.name}: {self.type}'
-        if Scope.is_class(self.scope):
-            return '#' + s
-        return s
+    def describe(self, qualified: bool = False) -> str:
+        buff = StringBuffer(sep=' ')
+        name = self.qname if qualified else self.name
+        scope = '#' if Scope.is_class(self.scope) else ''
+        if self.visibility is not Visibility.public:
+            buff.append(self.visibility.name)
+        buff.append(f'{scope}{name}: {self.type or "unknown"}')
+        if self.default is not None:
+            buff.append(f'= {self.default!r}')
+        elif self.default_factory is not None:
+            buff.append(f'= {self.default_factory.__name__}()')
+        buff.flag('lazy', self.lazy, skip=False)
+        if self.coerce:
+            buff.append('+coerce')
+        if self.changing:
+            buff.append('+changing')
+        if self.changed:
+            buff.append('+changed')
+        if self.delegate is not None:
+            buff.append('+delegate')
+        if self.required:
+            buff.append('+required')
+        if self.readonly:
+            buff.append('+readonly')
+        return str(buff)
 
     def build_peek(self, spec: Spec) -> Optional[Getter]:
         return build_peek(member=self.member, slot=self.slot)
@@ -1195,10 +1235,7 @@ class Field(RootObject):
 
 
     def _repr_args(self) -> str:
-        s = self.describe()
-        if spec := self.spec:
-            return s + ', ' + spec.show_keywords()
-        return s
+        return self.describe()
 
     @classmethod
     def build(cls, owner: 'Meta', name: str, spec: Spec) -> Optional[Self]:

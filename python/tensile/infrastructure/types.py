@@ -26,7 +26,7 @@ X = TypeVar('X')
 Y = TypeVar('Y', covariant=True)
 
 
-Keywords = dict[str, Any]
+Keywords = Mapping[str, Any]
 
 Getter = Callable[[T], Y]
 Setter = Callable[[T, X], None]
@@ -35,13 +35,23 @@ Coercer = Callable[[T, Any], Y]
 Initter = Callable[[T, 'Spec'], None]
 IsSetter = Callable[[T], bool]
 
-Predicate = Callable[[U], bool]
-Transform = Callable[[U], X]
+P = typing.ParamSpec('P')
 
-Relation = Callable[[U, V], bool]
+Function = Callable[P, X]
+UnaryFunction = Function[[U], X]
+BinaryFunction = Function[[U, V], X]
+PredicateFunction = Function[[U], bool]
+TransformFunction = Function[[U], X]
+
+Relation = Function[[U, V], bool]
+
 Comparison = Relation[U, U]
 
 Equiv = Relation[U, U]
+
+
+PredicateLike = Union[PredicateFunction[U], Keywords, Sequence['PredicateLike[U]'], str, None]
+TransformLike = Union[TransformFunction[U, X], Keywords, Sequence['TransformLike[U, X]'], str, None]
 
 
 class Scope(Enum):
@@ -146,7 +156,7 @@ def is_runtime_protocol(cls: type) -> bool:
 
 
 def is_runtime_class(cls: Any) -> bool:
-    return isinstance(cls, type) and (not is_protocol(cls) or is_runtime_protocol(cls))
+    return isinstance(cls, type) and (not is_protocol(cls) or is_runtime_protocol(cls)) and cls is not Any
 
 
 if _sysver >= (3, 10):
@@ -177,8 +187,53 @@ class SupportsGetItem(Protocol[U, X]):
     def __getitem__(self, item: U) -> X: ...
 
 
-# __all__ = [
-#     'AbstractSet',
-#     'Set',
-#     'MutableSet',
-# ]
+# class PredicateObject(Protocol[U]):
+#
+#     @property
+#     def is_always(self) -> bool: ...
+#
+#     @property
+#     def is_never(self) -> bool: ...
+#
+#     @property
+#     def is_constant(self) -> bool: ...
+#
+#     @property
+#     def __name__(self) -> str: ...
+#
+#     @property
+#     def evaluate(self) -> PredicateFunction[U]: ...
+#
+#     @property
+#     def not_evaluate(self) -> PredicateFunction[U]: ...
+#
+#     def describe(self, arg: str) -> str: ...
+#
+#     def implies(self, other: PredicateFunction[U]) -> bool: ...
+#
+#     def is_implied_by(self, other: PredicateFunction[U]) -> bool: ...
+#
+#     def denies(self, other: PredicateFunction[U]) -> bool: ...
+#
+#     def is_denied_by(self, other: PredicateFunction[U]) -> bool: ...
+#
+#     def __call__(self, value: U) -> bool: ...
+#
+#     def __eq__(self, other: Any) -> bool: ...
+#
+#     def __hash__(self) -> int: ...
+#
+#     def __and__(self, other: PredicateFunction[U]) -> 'PredicateObject[U]': ...
+#
+#     def __rand__(self, other: PredicateFunction[U]) -> 'PredicateObject[U]': ...
+#
+#     def __or__(self, other: PredicateFunction[U]) -> 'PredicateObject[U]': ...
+#
+#     def __ror__(self, other: PredicateFunction[U]) -> 'PredicateObject[U]': ...
+#
+#     def __xor__(self, other: PredicateFunction[U]) -> 'PredicateObject[U]': ...
+#
+#     def __rxor__(self, other: PredicateFunction[U]) -> 'PredicateObject[U]': ...
+#
+#     def __invert__(self) -> 'PredicateObject[U]': ...
+#

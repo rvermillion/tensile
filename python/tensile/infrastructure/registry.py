@@ -3,7 +3,8 @@
 from . import log
 from .root import RootObject
 from .types import *
-from .util import class_qname
+from .util import class_qname, process_specs
+
 
 if TYPE_CHECKING:
     from .meta import Meta
@@ -73,16 +74,18 @@ def factory_key(*, key: str = None, kind: str = None, from_type: str|type = None
 
 class Registry(RootObject, Generic[T]):
 
-    __slots__ = ['ifc', 'factories', 'fallbacks', 'namespaces', 'default_kind']
+    __slots__ = ['ifc', 'meta', 'factories', 'fallbacks', 'namespaces', 'default_kind']
 
     ifc: type[T]
+    meta: 'Meta'
     factories: dict[str, Factory[T]]
     fallbacks: tuple[RegistryFallback, ...]
     namespaces: Optional[list]
     default_kind: Optional[str]
 
-    def __init__(self, ifc: type[T], fallbacks: Iterable[RegistryFallback] = None):
+    def __init__(self, ifc: type[T], meta: 'Meta', fallbacks: Iterable[RegistryFallback] = None):
         self.ifc = ifc
+        self.meta = meta
         self.factories = {}
         self.fallbacks = () if fallbacks is None else tuple(fallbacks)
         self.namespaces = None
@@ -174,6 +177,9 @@ class Registry(RootObject, Generic[T]):
             else:
                 log.debug('No factory for {} with key {}', class_qname(self.ifc), key)
         return factory
+
+    def get_factories(self, *, key: str = None, kind: str = None, from_type: str|type = None) -> Iterable[Factory[T]]:
+        return self.get_factory(key=key, kind=kind, from_type=from_type),
 
     def _repr_args(self) -> str:
         return class_qname(self.ifc)
