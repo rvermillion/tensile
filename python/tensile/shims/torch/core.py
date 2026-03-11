@@ -96,7 +96,9 @@ from torch import (
     floor, floor_divide,
     sort, where,
     take, take_along_dim,
-    swapaxes,
+    conv1d, conv2d, conv3d,
+    swapaxes, transpose,
+    as_strided,
     broadcast_to,
     inf,
     all, any,
@@ -360,6 +362,7 @@ def max(a: ArrayLike, axis: Axes = None, keepdims: bool = False) -> Array:
     return torch.amax(ensure(a), dim=axis, keepdim=keepdims)
 
 
+# noinspection PyShadowingNames
 def mean(a: ArrayLike, axis: Axes = None, keepdims: bool = False, dtype: DType = None) -> Array:
     return torch.mean(ensure(a), dim=axis, keepdim=keepdims, dtype=dtype)
 

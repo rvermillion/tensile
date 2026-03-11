@@ -101,9 +101,11 @@ from mlx.core import (
     expand_dims, squeeze,
     take, take_along_axis,
     save_safetensors,
+    pad,
     contiguous,
-    swapaxes,
+    swapaxes, transpose,
     broadcast_to,
+    as_strided,
     inf,
     all, any,
     allclose,
@@ -213,6 +215,26 @@ def percentile(a: ArrayLike, axis: Axes = ..., dtype: DType = ..., keepdims: boo
 def average(a: ArrayLike, axis: Axes = ..., weights: ArrayLike = ..., **kwargs) -> Array:
     raise NotImplementedError()
 
+def conv1d(inputs: Array, weights: Array, bias: Array = None,
+           stride: int = 1, padding: int = 0, dilation: int = 1,
+           groups: int = 1) -> Array:
+    """1D convolution operation."""
+    out = mx.conv1d(inputs, weights, stride=stride, padding=padding, dilation=dilation, groups=groups)
+    return out if bias is None else out
+
+def conv2d(inputs: Array, weights: Array, bias: Array = None,
+           stride: int|tuple[int, int] = 1, padding: int|tuple[int, int] = 0, dilation: int|tuple[int, int] = 1,
+           groups: int = 1) -> Array:
+    """2D convolution operation."""
+    out = mx.conv2d(inputs, weights, stride=stride, padding=padding, dilation=dilation, groups=groups)
+    return out if bias is None else out
+
+def conv3d(inputs: Array, weights: Array, bias: Array = None,
+           stride: int|tuple[int, int, int] = 1, padding: int|tuple[int, int, int] = 0, dilation: int|tuple[int, int, int] = 1,
+           groups: int = 1) -> Array:
+    """3D convolution operation."""
+    out = mx.conv3d(inputs, weights, stride=stride, padding=padding, dilation=dilation, groups=groups)
+    return out if bias is None else out
 
 def searchsorted(a: Array, x: ArrayOrScalar, side: Literal["left", "right"] = ...) -> Array:
     # TODO: Figure out if there's a better way than roundtripping to numpy
