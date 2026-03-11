@@ -4,14 +4,17 @@ import re
 
 from ..infrastructure import Object, Representable, log, meta
 from ..infrastructure.field import method_builders
-from ..infrastructure.meta import Meta, ObjectMeta, Field, Scope, field
+from ..infrastructure.meta import Meta, ObjectMeta, Field, Scope
 from ..infrastructure.abc import ABCClass
 from ..infrastructure.util import name_function
 from ..infrastructure.types import (
     Annotated, Any, Callable, ClassVar, Iterable, Iterator, Optional, Sequence, TypeVar, Self, Union,
-    Getter, Setter, Spec
+    Getter, Setter, Spec, missing
 )
 from .match import KeyMatcher, default_matchers, list_matchers
+
+
+C = TypeVar('C', bound='Config')
 
 
 class ConfigIterable(Iterable):
@@ -35,20 +38,20 @@ use_default = object()
 
 class ConfigData(Representable):
 
-    config: Annotated['Config', field(
+    config: Annotated['Config', meta.field(
         doc='The config this data is for',
     )]
 
-    step: Annotated[str, field(
+    step: Annotated[str, meta.field(
         doc='The step',
         default='config'
     )]
-    parent: Annotated[Optional['ConfigData'], field(
+    parent: Annotated[Optional['ConfigData'], meta.field(
         doc='The parent config',
         default=None
     )]
     locals: Sequence[dict[str, Any]]
-    inherit: Annotated[bool, field(
+    inherit: Annotated[bool, meta.field(
         doc='Whether to inherit',
         default=True
     )]
@@ -228,14 +231,32 @@ class ConfigData(Representable):
         return default
 
     def get_field(self, key: str) -> Optional['ConfigField']:
+        # noinspection PyProtectedMember
         return self.config._config_get_field(key)
 
-    def get_config(self, key: str) -> 'Config':
-        config = self.get(key)
+    def get_config(self, key: str, config_class: type[C] = None) -> C:
+        if config_class is None: config_class = Config
+        if f := self.get_field(key):
+            config = f.get_value(self, key, missing)
+            if config is missing:
+                return config_class.empty()
+        else:
+            config = config_class.empty()
+            for config in self.iter(key):
+                break
+
         if config is None:
-            return Config.empty
+            return config_class.empty()
         elif isinstance(config, Config):
-            return config
+            if config_class is Config or isinstance(config, config_class):
+                return config
+            raise TypeError(
+                f'Config value {config} is not a {config_class.qname} (got {type(config).__name__})'
+            )
+        elif isinstance(config, dict):
+            return config_class.construct(config)
+        elif isinstance(config, ConfigData):
+            return config.config
         raise TypeError(f'Config value {config} is not a Config')
 
     def get(self, *keys: str, default: Any = None) -> Any:
@@ -265,7 +286,7 @@ class ConfigData(Representable):
         return {key: self.get(key) for key in keys}
 
     def set_defaults(self, defaults: dict[str, Any]) -> Self:
-        self.defaults = defaults
+        self.defaults = defaults.copy()
         return self
 
     def add_defaults(self, defaults: dict[str, Any]) -> Self:
@@ -273,7 +294,7 @@ class ConfigData(Representable):
             if self.defaults:
                 self.defaults.update(defaults)
             else:
-                self.defaults = defaults
+                self.defaults = defaults.copy()
         return self
 
     def __getitem__(self, key: str) -> Any:
@@ -423,30 +444,31 @@ class ListConfigField(ConfigField):
         raise TypeError(f'Field {self.name} is not a ListConfig')
 
 
-# def field(doc: str = None, **kwargs) -> dict[str, Any]:
-#     return dict(doc=doc, **kwargs)
+C = TypeVar('C', bound='Config')
+
 
 class Config(Object):
 
     __slots__ = ('_config_data',)
 
-    _config_data: Annotated[ConfigData, field(
-        doc='The config info',
+    _config_data: Annotated[ConfigData, meta.field(
+        doc='The actual data for this configuration',
+        required=True,
     )]
-
-    _config_default_step: ClassVar[Annotated[str, field(ignore=True)]] = 'config'
-    _config_template_matchers: ClassVar[Annotated[Sequence[type[KeyMatcher]], field(ignore=True)]] = default_matchers
+    _config_default_step: ClassVar[Annotated[str, meta.field(
+        doc="The default step name for this class of configuration",
+        ignore=True,
+    )]] = 'config'
+    _config_template_matchers: ClassVar[Annotated[Sequence[type[KeyMatcher]], meta.field(
+        doc='The template matchers for this class of configuration',
+        ignore=True,
+    )]] = default_matchers
 
     def postinit(self, spec: Spec):
         super().postinit(spec)
         data = self._config_data
         if data.config is None:
             data.config = self
-        if spec.get('post_init'):
-            self.__post_init__()
-
-    def __post_init__(self):
-        pass
 
     def override(self, **kwargs) -> Self:
         if kwargs:
@@ -460,7 +482,7 @@ class Config(Object):
     def _config_matchers_for_key(cls, key: str, matchers: Sequence[KeyMatcher]) -> Sequence[KeyMatcher]:
         return matchers
 
-    def keys(self) -> Iterable[str]:
+    def get_keys(self) -> Iterable[str]:
         for name, field in self.meta.fields.items():
             if field.scope is Scope.instance_scope and isinstance(field, ConfigField):
                 yield name
@@ -471,10 +493,15 @@ class Config(Object):
     def get(self, key: str, default: Any = None) -> Any:
         return self._config_data.get(key, default=default)
 
+    def get_config(self, key: str, config_class: type[C] = None) -> C:
+        return self._config_data.get_config(key, config_class=config_class)
+
     def put(self, key: str, value: Any) -> None:
         self._config_data.put(key, value)
 
     def to_dict(self, *keys: str) -> dict[str, Any]:
+        if not keys:
+            keys = self.get_keys()
         return {key: self.get(key) for key in keys}
 
     def set_defaults(self, **defaults) -> Self:
@@ -497,14 +524,16 @@ class Config(Object):
         if isinstance(parent, Config): parent = parent._config_data
         return cls(_config_data=ConfigData.construct(values=values, step=step, parent=parent, **kwargs))
 
-    empty: ClassVar['Config']
+    @classmethod
+    def empty(cls) -> Self:
+        if '_config_empty' not in cls.__dict__:
+            setattr(cls, '_config_empty', cls(_config_data=ConfigData()))
+        return cls._config_empty
+
+    _config_empty: ClassVar['Config']
 
     Meta = ConfigMeta
 
-
-Config.empty = Config(_config_data=ConfigData())
-
-C = TypeVar('C', bound=Config)
 
 digits_pat = re.compile(r'^\d+$')
 
@@ -514,17 +543,14 @@ class ListConfig(Sequence[C], Config, metaclass=ABCClass):
 
     __slots__ = ('count', '_config_item_field')
 
-    count: Annotated[int, field(doc='The count', inherit=False)]
-
-    _config_item_field: Annotated[ConfigField, field(
+    count: Annotated[int, meta.field(
+        doc='The number of items in the list',
+        inherit=False)
+    ]
+    _config_item_field: Annotated[ConfigField, meta.field(
         doc='The field for the items of the list'
     )]
-
     _config_template_matchers = list_matchers
-
-    # def __init__(self, data: ConfigData, *, item_field: ConfigField = None, **kwargs):
-    #     self._config_item_field = item_field
-    #     super().__init__(data, **kwargs)
 
     def _config_get_field(self, name: str) -> Optional[ConfigField]:
         f = self.meta.fields.get(name)

@@ -1315,7 +1315,7 @@ class Predicates:
         return coerce(spec)
 
     @staticmethod
-    def function(evaluate: PredicateFunction[U]) -> Predicate[U]:
+    def function(evaluate: PredicateFunction[X]) -> Predicate[X]:
         return coerce(evaluate)
 
     if TYPE_CHECKING:

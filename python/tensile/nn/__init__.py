@@ -24,3 +24,6 @@ else:
     else:
         raise NotImplementedError(f'No tensor shim named {ten_kind} found!')
 
+from . import module, activations, lm, losses, quantization
+
+from .module import CompiledModule, Module, ModuleArgs

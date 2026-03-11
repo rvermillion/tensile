@@ -72,9 +72,43 @@ def factory_key(*, key: str = None, kind: str = None, from_type: str|type = None
     return key
 
 
+class Kinds(RootObject):
+
+    __slots__ = ('kinds_for_impls', 'impl_for_kind')
+
+    kinds_for_impls: dict[type, list[str]]
+    impl_for_kind: dict[str, type]
+
+    def __init__(self, kind: str, impl: type):
+        self.kinds_for_impls = {impl: [kind]}
+        self.impl_for_kind = {kind: impl}
+
+    def add(self, impl: type, kind: str, primary: bool = False):
+        if kinds := self.kinds_for_impls.get(impl):
+            if primary:
+                kinds.insert(0, kind)
+            else:
+                kinds.append(kind)
+        else:
+            self.kinds_for_impls[impl] = [kind]
+        self.impl_for_kind[kind] = impl
+
+    def get_kinds(self, impl: type) -> Optional[list[str]]:
+        return self.kinds_for_impls.get(impl)
+
+    def get_kind(self, impl: type) -> Optional[str]:
+        if kinds := self.get_kinds(impl):
+            return kinds[0]
+        return None
+
+    def get_impl(self, kind: str) -> Optional[type]:
+        return self.impl_for_kind.get(kind)
+
+
+
 class Registry(RootObject, Generic[T]):
 
-    __slots__ = ['ifc', 'meta', 'factories', 'fallbacks', 'namespaces', 'default_kind', 'kinds_for_impls']
+    __slots__ = ['ifc', 'meta', 'factories', 'fallbacks', 'namespaces', 'default_kind', 'kinds']
 
     ifc: type[T]
     meta: 'Meta'
@@ -82,7 +116,7 @@ class Registry(RootObject, Generic[T]):
     fallbacks: tuple[RegistryFallback, ...]
     namespaces: Optional[list]
     default_kind: Optional[str]
-    kinds_for_impls: Optional[dict[type, list[str]]]
+    kinds: Optional[Kinds]
 
     def __init__(self, ifc: type[T], meta: 'Meta', fallbacks: Iterable[RegistryFallback] = None):
         self.ifc = ifc
@@ -91,7 +125,7 @@ class Registry(RootObject, Generic[T]):
         self.fallbacks = () if fallbacks is None else tuple(fallbacks)
         self.namespaces = None
         self.default_kind = None
-        self.kinds_for_impls = None
+        self.kinds = None
 
     def configure(self, default_kind: str = None, modules: Union[str, Sequence[str]] = None, append_kind: bool = False,  **kwargs) -> None:
         self.debug('configuring registry {}: {}', class_qname(self.ifc), kwargs)
@@ -113,25 +147,19 @@ class Registry(RootObject, Generic[T]):
         return None
 
     def add_kind(self, impl: type, kind: str, primary: bool = False):
-        if kinds_for_impls := self.kinds_for_impls:
-            if kinds := kinds_for_impls.get(impl):
-                if primary:
-                    kinds.insert(0, kind)
-                else:
-                    kinds.append(kind)
-            else:
-                kinds_for_impls[impl] = [kind]
+        if kinds := self.kinds:
+            kinds.add(impl, kind, primary)
         else:
-            self.kinds_for_impls = {impl: [kind]}
+            self.kinds = Kinds(kind, impl)
 
     def get_kinds(self, impl: type) -> Optional[list[str]]:
-        if kinds_for_impls := self.kinds_for_impls:
-            return kinds_for_impls.get(impl)
+        if kinds := self.kinds:
+            return kinds.get_kinds(impl)
         return None
 
     def get_kind(self, impl: type) -> Optional[str]:
-        if kinds := self.get_kinds(impl):
-            return kinds[0]
+        if kinds := self.kinds:
+            return kinds.get_kind(impl)
         return None
 
     def put_implementation(self, impl: type, *, key: str = None, kind: str = None, from_type: str = None,

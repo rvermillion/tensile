@@ -23,3 +23,7 @@ else:
         raise NotImplementedError(f'No tensor shim named {default_shim_name} found!')
 
 ten = core
+
+Array = ten.Array
+Shape = ten.Shape
+DType = ten.DType
