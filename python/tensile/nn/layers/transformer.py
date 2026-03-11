@@ -1,12 +1,12 @@
 #  Copyright (c) 2025. Richard Vermillion. All Rights Reserved.
 
-from ...common import *
+from ..common import *
 # from ...util import normalize
-from ...module import *
-from ...attention import Attention
-from ..dropout import Dropout
-from ..mlp import MLP
-from ..normalization import Normalization
+from ..module import *
+from ..attention import Attention
+from .dropout import Dropout
+from .mlp import MLP
+from .normalization import Normalization
 
 
 if TYPE_CHECKING:
