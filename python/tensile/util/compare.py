@@ -8,7 +8,7 @@ from typing import Annotated, Any, Self
 from ..infrastructure import Object, field
 from .. import ten
 from .stats import get_stats
-from ..infrastructure import Predicate, Predicates
+from ..infrastructure import PredicateFunction, predicates
 
 
 CompareResult = str|dict[str, 'CompareResult']|None
@@ -33,9 +33,9 @@ class Comparison(Object):
     lname: Annotated[str, field()]
     rname: Annotated[str, field()]
     eps: Annotated[float, field(default=default_eps)]
-    ignore_key: Annotated[Predicate[str], field(default=default_ignore_key)]
-    ignore_file: Annotated[Predicate[str], field(default=Predicates.never)]
-    ignore_path: Annotated[Predicate[str], field(default=Predicates.never)]
+    ignore_key: Annotated[PredicateFunction[str], field(default=default_ignore_key)]
+    ignore_file: Annotated[PredicateFunction[str], field(default=predicates.never)]
+    ignore_path: Annotated[PredicateFunction[str], field(default=predicates.never)]
     skip_same: Annotated[bool, field(default=True)]
 
     def _lazy_lname(self):
@@ -192,13 +192,13 @@ class Comparison(Object):
     def build(cls, left: str|Path, right: str|Path,
               lname: str = None, rname: str = None,
               eps: float = default_eps,
-              ignore_key: Predicate[str] = None,
+              ignore_key: PredicateFunction[str] = None,
               ignore_keys: set[str] = None,
               ignore_key_pattern: str = None,
-              ignore_file: Predicate[str] = None,
+              ignore_file: PredicateFunction[str] = None,
               ignore_files: set[str] = None,
               ignore_file_pattern: str = None,
-              ignore_path: Predicate[str] = None,
+              ignore_path: PredicateFunction[str] = None,
               ignore_paths: set[str] = None,
               ignore_path_pattern: str = None,
               skip_same: bool = True,
@@ -219,8 +219,8 @@ class Comparison(Object):
                    ignore_key=ignore_key, ignore_file=ignore_file, ignore_path=ignore_path, skip_same=skip_same,)
 
 
-def compose_predicate(ignore_key: Predicate[str] = None, ignore_keys: set[str] = None, ignore_pattern: str = None) -> Predicate[str]:
-    preds: list[Predicate[str]] = []
+def compose_predicate(ignore_key: PredicateFunction[str] = None, ignore_keys: set[str] = None, ignore_pattern: str = None) -> PredicateFunction[str]:
+    preds: list[PredicateFunction[str]] = []
 
     if ignore_key is not None: preds.append(ignore_key)
     if ignore_keys: preds.append(lambda key: key in ignore_keys)
@@ -230,4 +230,4 @@ def compose_predicate(ignore_key: Predicate[str] = None, ignore_keys: set[str] =
     if not preds:
         preds.append(default_ignore_key)
 
-    return Predicates.any(*preds)
+    return predicates.any(*preds)

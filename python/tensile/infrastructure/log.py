@@ -3,7 +3,7 @@
 import time
 
 from os import environ
-from typing import Any, Callable, ClassVar, Optional, Self, TypeAlias
+from typing import Any, Callable, ClassVar, Optional, Self
 from .represent import Representable
 from .util import class_qname
 from . import deployment

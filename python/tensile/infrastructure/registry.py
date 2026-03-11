@@ -3,7 +3,7 @@
 from . import log
 from .root import RootObject
 from .types import *
-from .util import class_qname, process_specs
+from .util import class_qname
 
 
 if TYPE_CHECKING:
@@ -74,7 +74,7 @@ def factory_key(*, key: str = None, kind: str = None, from_type: str|type = None
 
 class Registry(RootObject, Generic[T]):
 
-    __slots__ = ['ifc', 'meta', 'factories', 'fallbacks', 'namespaces', 'default_kind']
+    __slots__ = ['ifc', 'meta', 'factories', 'fallbacks', 'namespaces', 'default_kind', 'kinds_for_impls']
 
     ifc: type[T]
     meta: 'Meta'
@@ -82,6 +82,7 @@ class Registry(RootObject, Generic[T]):
     fallbacks: tuple[RegistryFallback, ...]
     namespaces: Optional[list]
     default_kind: Optional[str]
+    kinds_for_impls: Optional[dict[type, list[str]]]
 
     def __init__(self, ifc: type[T], meta: 'Meta', fallbacks: Iterable[RegistryFallback] = None):
         self.ifc = ifc
@@ -90,6 +91,7 @@ class Registry(RootObject, Generic[T]):
         self.fallbacks = () if fallbacks is None else tuple(fallbacks)
         self.namespaces = None
         self.default_kind = None
+        self.kinds_for_impls = None
 
     def configure(self, default_kind: str = None, modules: Union[str, Sequence[str]] = None, append_kind: bool = False,  **kwargs) -> None:
         self.debug('configuring registry {}: {}', class_qname(self.ifc), kwargs)
@@ -109,6 +111,34 @@ class Registry(RootObject, Generic[T]):
             self.fallbacks = fallbacks[1:]
             return fallback
         return None
+
+    def add_kind(self, impl: type, kind: str, primary: bool = False):
+        if kinds_for_impls := self.kinds_for_impls:
+            if kinds := kinds_for_impls.get(impl):
+                if primary:
+                    kinds.insert(0, kind)
+                else:
+                    kinds.append(kind)
+            else:
+                kinds_for_impls[impl] = [kind]
+        else:
+            self.kinds_for_impls = {impl: [kind]}
+
+    def get_kinds(self, impl: type) -> Optional[list[str]]:
+        if kinds_for_impls := self.kinds_for_impls:
+            return kinds_for_impls.get(impl)
+        return None
+
+    def get_kind(self, impl: type) -> Optional[str]:
+        if kinds := self.get_kinds(impl):
+            return kinds[0]
+        return None
+
+    def put_implementation(self, impl: type, *, key: str = None, kind: str = None, from_type: str = None,
+                           override: bool = False) -> Optional[Factory[Any]]:
+        factory = getattr(impl, 'provide_from', impl)
+        self.add_kind(impl, kind)
+        return self.put_factory(factory, key=key, kind=kind, from_type=from_type, override=override)
 
     def put_factory(self, factory: Factory[Any], *, key: str = None, kind: str = None, from_type: str = None,
                     override: bool = False) -> Optional[Factory[Any]]:

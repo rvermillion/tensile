@@ -1,4 +1,5 @@
 #  Copyright (c) 2026. Richard Vermillion. All Rights Reserved.
+from collections.abc import Sized
 from types import EllipsisType, NoneType
 from typing import Any, Generic, TYPE_CHECKING, TypeVar, final
 
@@ -310,13 +311,13 @@ class Transforms:
     false: Transform[Any, bool] = ConstantTransform(False)
     identity: Transform[Any, Any] = IdentityTransform()
     repr: Transform[Any, str] = Transform(repr)
+    length: Transform[Sized, int] = Transform(len)
     str: Transform[Any, str] = Transform(str)
     int: Transform[Any, int] = Transform(int)
     float: Transform[Any, float] = Transform(float)
 
 
 named_factories: dict[str, Callable[[Any], Transform]] = {
-    'none': Transforms.none,
     'attr': Transforms.get_attr,
     'key': Transforms.get_item,
 }

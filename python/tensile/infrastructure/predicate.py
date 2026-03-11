@@ -1,5 +1,5 @@
 #  Copyright (c) 2025. Richard Vermillion. All Rights Reserved.
-
+from collections.abc import Sized
 from typing import Any, Callable, ClassVar, Container, Generic, Iterable, Mapping, Optional, Sequence, TypeVar
 import re
 import operator as op
@@ -8,8 +8,8 @@ from builtins import all as ball, any as bany
 import tensile.infrastructure as infra
 
 from .types import Comparison, PredicateFunction, PredicateLike, TransformFunction, TransformLike, TYPE_CHECKING, missing
-from .meta import meta_coerce_class, meta_configure_coerce, meta_for_qname
-from .util import class_qname, name_function, tie_call, spread_mapping, spread_sequence
+from .meta import meta_coerce_class, meta_configure_coerce
+from .util import class_qname, name_function, tie_call, spread_mapping
 
 X = TypeVar('X')
 U = TypeVar('U', contravariant=True)
@@ -217,8 +217,11 @@ def key(key: str, pred: PredicateFunction, if_missing: bool = False) -> Predicat
     if pred is always:
         return always if if_missing else has(key)
     def key_pred(obj: Any) -> bool:
-        value = obj.get(key, missing)
-        return if_missing if value is missing else pred(value)
+        try:
+            value = obj[key]
+        except (KeyError, TypeError, IndexError):
+            return if_missing
+        return pred(value)
     return name_function(key_pred, f'key[{key!r}, {pred.__name__}]')
 
 
@@ -409,7 +412,8 @@ def coerce(spec: PredicateLike[U]) -> Predicate[U]:
     raise ValueError(f"Invalid predicate spec: {spec}")
 
 
-def full_coerce(self, spec: Any = None, /, **kwargs) -> Predicate:
+# noinspection PyUnusedLocal
+def full_coerce(meta, spec: Any = None, /, **kwargs) -> Predicate:
     if spec is None:
         spec = kwargs
     elif kwargs and isinstance(spec, Mapping):
@@ -1261,6 +1265,10 @@ class Predicates:
         return TransformPredicate(infra.transforms.coerce(txf), coerce(predicate))
 
     @staticmethod
+    def length(predicate: PredicateLike[int]) -> Predicate[Sized]:
+        return Predicates.transform(infra.transforms.length, coerce(predicate))
+
+    @staticmethod
     def contains(s: str) -> Predicate[str]:
         def pred(x: str) -> bool:
             return s in x
@@ -1344,7 +1352,9 @@ class Predicates:
     is_none: Predicate[Any] = is_(None)
     not_none: Predicate[Any] = ~is_none
     is_str: Predicate[Any] = IsInstancePredicate(str)
-
+    is_int: Predicate[Any] = IsInstancePredicate(int)
+    is_float: Predicate[Any] = IsInstancePredicate(float)
+    is_bool: Predicate[Any] = IsInstancePredicate(bool)
     PredicateFunction: ClassVar[type[Predicate]] = Predicate
 
 
@@ -1354,7 +1364,7 @@ def custom(evaluate: PredicateLike[U] = None, implies: PredicateFunction[Predica
 
 
 def build_lambda(expr: str) -> Predicate:
-    pred = eval('lambda x: bool(' + expr + ')', globals(), {})
+    pred: Callable = eval('lambda x: bool(' + expr + ')', globals(), {})
     if not callable(pred):
         raise ValueError(f'Invalid lambda expression: {expr}')
     return Predicates.function(pred)
@@ -1389,92 +1399,6 @@ named_singletons: dict[str, Predicate[Any]] = {
     name: pred for name, pred in Predicates.__dict__.items() if isinstance(pred, Predicate)
 }
 
-
-def test():
-
-    def test_p(ap):
-        print('-' * 80)
-        print(ap)
-        print(ap.evaluate.__name__)
-
-    def test_pa(p, *args):
-        test_p(p)
-        for arg in args:
-            print('x =', arg)
-            print(p.describe('x'), '>', p(arg))
-
-    def test_all(*p):
-        ap = Predicates.all(*p)
-        test_p(ap)
-
-    def test_any(*p):
-        ap = Predicates.any(*p)
-        test_p(ap)
-
-    is_str = Predicates.is_instance(str)
-    is_int = Predicates.is_instance(int)
-    is_float = Predicates.is_instance(float)
-    is_bool = Predicates.is_instance(bool)
-
-    gt_40 = Predicates.gt(40)
-    eq_23 = Predicates.eq(23)
-    gt_10 = Predicates.gt(10)
-    ge_11 = Predicates.ge(11)
-    gt_50 = Predicates.gt(50)
-    lt_40 = Predicates.lt(40)
-    lt_10 = Predicates.lt(10)
-    le_10 = Predicates.le(10)
-
-    test_all(gt_40, gt_10, ge_11, gt_50)
-    test_any(gt_40, gt_10, ge_11, gt_50)
-    test_all(lt_10, le_10)
-    test_any(lt_10, le_10)
-    test_all(gt_40, lt_10)
-    test_any(gt_40, lt_10)
-    test_all(gt_10, lt_40, Predicates.always)
-    test_any(gt_10, lt_40, Predicates.always)
-
-    test_all(is_int, is_bool)
-    test_any(is_int, is_bool)
-
-    test_p(gt_10 | ~gt_50 | ~eq_23)
-
-    test_p(~~gt_10)
-
-    test_p(Predicates.always | Predicates.never)
-    test_p(Predicates.always & Predicates.never)
-    test_p(~Predicates.never | Predicates.always)
-    test_p(~Predicates.never | Predicates.never)
-    test_p(~Predicates.never & Predicates.always)
-    test_p(is_str & is_str)
-
-    test_p(Predicates.all(is_int, gt_10, is_bool))
-
-    test_pa(~gt_10, 10)
-    test_pa(ge_11, 11)
-
-    g = [1, 2, 3]
-    h = [
-        {'foo': 'bar'},
-        {'foo': 2},
-        {'foo': 'bat'},
-    ]
-
-    test_pa(Predicates.with_key('foo', is_str & Predicates.starts_with('ba')), *h)
-    test_pa(Predicates.with_key('foo', is_str & Predicates.matches('b.[tu]')), *h)
-
-    foo = Predicates.coerce([gt_50, gt_10, ge_11])
-    test_p(foo)
-
-    test_p(Predicates.is_true & Predicates.is_false)
-    test_p(Predicates.is_true | Predicates.is_false)
-    test_p(Predicates.eq(100) & Predicates.eq(200))
-    test_p(Predicates.eq(100) | Predicates.eq(200))
-
-    exit(0)
-
-
-# test()
 
 __all__ = [
     'Predicates',

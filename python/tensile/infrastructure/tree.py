@@ -338,6 +338,8 @@ def value_is_instance(*cls: type) -> TreeFilter:
 
 
 is_array: Predicate = predicates.function(ten.is_array)
+is_dtype: Predicate = predicates.function(ten.is_dtype)
+
 is_array_entry: TreeFilter = value_predicate(is_array)
 
 

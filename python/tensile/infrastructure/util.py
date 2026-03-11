@@ -75,16 +75,19 @@ def name_function(func: F, name: str, qualname: str = None, cls: type = None, na
         func.__qualname__ = qualname
     return func
 
-def process_specs(spec: Mapping[str, Any] = None, /, kind: str = None, **kwargs) -> tuple[str, Mapping[str, Any]]:
+
+# noinspection PyUnusedLocal
+def noop(*args, **kwargs):
+    pass
+
+
+def process_specs(spec: Optional[Mapping[str, Any]], kwargs: dict[str, Any]) -> tuple[str, Mapping[str, Any]]:
     if spec is None:
         spec = kwargs
     else:
         spec = dict(spec)
         spec.update(kwargs)
-        if kind is None:
-            kind = spec.pop('kind', None)
-    # if kind is None and len(spec) == 1:
-    #     (kind, spec), = spec.items()
+    kind = spec.pop('kind', None)
     return kind, spec
 
 
@@ -188,6 +191,11 @@ def tie_call(cls: type, slot: str):
     else:
         raise TypeError(f'Cannot tie __call__ to member [{slot}]: {member!r}')
 
+
+def join_str(*args: str, sep: str = ', ') -> str:
+    return sep.join(arg for arg in args if arg)
+
+
 _get = dict.get
 _getitem = dict.__getitem__
 _setitem = dict.__setitem__
@@ -202,7 +210,7 @@ deleted = object()
 
 class NewSpec(dict[str, Any]):
 
-    __slots__ = ('origin')
+    __slots__ = ('origin',)
 
     origin: Mapping[str, Any]
 

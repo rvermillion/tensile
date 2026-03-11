@@ -33,6 +33,7 @@ class Representable:
     __slots__ = ()
 
     def __repr__(self) -> str:
+        # noinspection PyBroadException
         try:
             return self._repr()
         except:
@@ -56,6 +57,7 @@ class Representable:
     def _repr_args(self, **options) -> str:
         return ', '.join(map(repr, self._repr_arg_items(**options)))
 
+    # noinspection PyMethodMayBeStatic,PyUnusedLocal
     def _repr_arg_items(self, **options) -> Iterable[Any]:
         return ()
 

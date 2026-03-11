@@ -4,104 +4,18 @@ import sys
 from .types import *
 from .behavior import *
 from .root import *
-from . import field as fields
 from .field import Field, FieldType, field, private_slot
 from .registry import Registry, Factory, factory_key, meta_by_qname, meta_by_type, meta_register
-from .util import class_qname, process_specs, tie_call
+from .util import class_qname, process_specs
 
 
 if TYPE_CHECKING:
     import tensile.infrastructure
 
 
-class DeferredProperty:
-
-    name: str
-    owner: type
-    slot: str
-
-    def __init__(self, **kwargs):
-        for key, val in kwargs.items():
-            setattr(self, key, val)
-
-    def __set_name__(self, owner, name):
-        self.name = name
-        self.owner = owner
-        prop = self.build()
-        setattr(owner, name, prop)
-
-    def __getattr__(self, item):
-        if item[0] != '_':
-            if lazy := getattr(self, f'_lazy_{item}', None):
-                return lazy()
-        return super().__getattribute__(item)
-
-    def _lazy_slot(self):
-        return f'_{self.name}'
-
-    def build(self) -> property:
-        raise NotImplementedError()
-
-
-class DeferredDictProperty(DeferredProperty):
-
-    adder: str
-
-    def _lazy_adder(self):
-        return f'add_{self.name}'
-
-    def build(self) -> property:
-        slot = self.slot
-        adder = self.adder
-
-        def fget(this):
-            return getattr(this, slot)
-
-        if adder:
-            def fset(this, value):
-                setattr(this, slot, {})
-                if isinstance(value, Sequence):
-                    if value:
-                        add = getattr(this, adder)
-                        for spec in value:
-                            if isinstance(spec, Mapping):
-                                add(**spec)
-                            else:
-                                add(spec)
-                elif isinstance(value, Mapping):
-                    if value:
-                        add = getattr(this, adder)
-                        for path, spec in value.items():
-                            if isinstance(spec, Mapping):
-                                add(path, **spec)
-                            else:
-                                add(path, spec)
-                elif value is not None:
-                    raise ValueError(f'{slot[1:]} must be either a sequence or a mapping')
-        else:
-            def fset(this, value):
-                coll = {}
-                setattr(this, slot, coll)
-                if isinstance(value, Mapping):
-                    for key, spec in value.items():
-                        coll[key] = spec
-                elif value is not None:
-                    raise ValueError(f'{slot[1:]} must be either a sequence or a mapping')
-
-        return property(fget, fset)
-
-
-if TYPE_CHECKING:
-    # noinspection PyUnusedLocal
-    def dict_property(slot: str = None, adder: str = None) -> property: ...
-else:
-    def dict_property(**kwargs):
-        return DeferredDictProperty(**kwargs)
-
-
 class Updateable(Protocol):
 
-    def update(self, spec: Keywords = None, /, **kwargs): ...
+    def update_fields(self, spec: Keywords = None, /, **kwargs): ...
 
 
 def update_from_spec(this: Any, spec: Spec):
@@ -127,7 +41,7 @@ class CoerceFunction(Protocol):
     def __call__(self, spec: Any = None, /, **kwargs) -> Any: ...
 
 
-class Meta(UpdateableObject):
+class Meta(RootObject):
 
     __slots__ = ['cls', 'bases', 'children', 'registry', 'coerce']
 
@@ -141,6 +55,7 @@ class Meta(UpdateableObject):
     registry: Optional[Registry[Any]]
     coerce: CoerceFunction
 
+    # noinspection PyShadowingNames
     def __init__(self, cls: type, coerce: CoerceFunction = None, **kwargs):
         if cls in meta_by_type:
             raise MetaError(f'Meta object already defined for {cls}')
@@ -152,8 +67,6 @@ class Meta(UpdateableObject):
         self.coerce = self.default_coerce if coerce is None else coerce
 
         meta_register(self, cls=cls)
-        # meta_by_type[cls] = self
-        # meta_by_qname[self.qname] = self
 
     @property
     def name(self) -> str:
@@ -168,11 +81,14 @@ class Meta(UpdateableObject):
         return {}
 
     @property
+    def class_fields(self) -> dict[str, Field]:
+        return {n: f for n, f in self.fields.items() if Scope.is_class(f.scope)}
+
+    @property
     def instance_fields(self) -> dict[str, Field]:
         return {n: f for n, f in self.fields.items() if Scope.is_instance(f.scope)}
 
     def default_coerce(self, spec: Any = None, /, **kwargs) -> Any:
-
         if self.has_instance(spec):
             return spec
 
@@ -180,20 +96,15 @@ class Meta(UpdateableObject):
 
         if spec is None:
             if not kwargs:
-                factory = self.get_factory(from_type='none')
-                return factory()
-                # return cls._coerce_from_none()
+                if factory := self.get_factory(from_type='none'):
+                    return factory()
+                raise TypeError(f'{cls}: cannot coerce None with kwargs {kwargs} because no factory is registered for None')
 
         factory = None
-        kind = None
         if spec is None or isinstance(spec, Mapping):
-            kind, new_spec = process_specs(spec, **kwargs)
-            # if kind is None:
-            #     kind = 'default'
-                # return cls.create(spec)
+            kind, new_spec = process_specs(spec, kwargs)
             if kind is not None:
-                factory = self.get_factory(kind=kind)
-                if factory:
+                if factory := self.get_factory(kind=kind):
                     return factory(new_spec)
             factory = self.get_factory(from_type='mapping')
             if factory is None:
@@ -208,8 +119,6 @@ class Meta(UpdateableObject):
             factory = self.get_factory(from_type='str')
         elif isinstance(spec, Sequence):
             factory = self.get_factory(from_type='sequence')
-            # if factory is None:
-            #     factory = self.get_factory(from_type='sequence')
         elif isinstance(spec, type):
             factory = self.get_factory(from_type='type')
         elif callable(spec):
@@ -228,7 +137,7 @@ class Meta(UpdateableObject):
                     if factory: break
 
             if factory: return factory(spec, **kwargs)
-        raise ValueError(f'Cannot coerce {spec} of kind [{kind}] to {cls}')
+        raise ValueError(f'Cannot coerce {spec} with kwargs [{kwargs}] to {cls}')
 
     def get_class(self, cls: type[T]) -> Optional[type[T]]:
         if issubclass(self.cls, cls):
@@ -265,7 +174,7 @@ class Meta(UpdateableObject):
     def get_registry(self) -> Registry[Any]:
         registry = self.registry
         if registry is None:
-            cls: type[Any] = self.cls
+            cls: type = self.cls
             # noinspection PyTypeChecker
             registry = self.registry = Registry(cls, self)
         return registry
@@ -279,11 +188,6 @@ class Meta(UpdateableObject):
             **kwargs)
         return registry
 
-    # def put_factory(self, factory: Factory[Any], *, key: str = None, kind: str = None, from_type: str = None,
-    #                 override: bool = False) -> None:
-    #     registry = self.get_registry()
-    #     registry.put_factory(factory, key=key, kind=kind, from_type=from_type, override=override)
-
     def get_factory(self, *, key: str = None, kind: str = None, from_type: str|type = None) -> Optional[Factory[Any]]:
         registry = self.registry
         if registry is None:
@@ -291,7 +195,8 @@ class Meta(UpdateableObject):
             return Registry.method_factory(self.cls, factory_key(key=key, kind=kind, from_type=from_type))
         return registry.get_factory(key=key, kind=kind, from_type=from_type)
 
-    def spread_spec(self, factory: Factory[T]) -> Factory[T]:
+    @staticmethod
+    def spread_spec(factory: Factory[T]) -> Factory[T]:
 
         def spread(spec: Any = None, /, **kwargs) -> T:
             if spec and isinstance(spec, Mapping):
@@ -303,6 +208,7 @@ class Meta(UpdateableObject):
         # noinspection PyTypeChecker
         return spread
 
+    # noinspection PyShadowingNames
     def provide_from_type(self, *types: Union[type, str], spread: bool = False) -> Callable[[T], T]:
         reg = self.get_registry()
 
@@ -343,35 +249,26 @@ class Meta(UpdateableObject):
         if kinds:
             def decorator(sub: T) -> T:
                 if isinstance(sub, type):
-                    factory = getattr(sub, 'provide_from', sub)
+                    for kind in kinds:
+                        reg.put_implementation(sub, kind=kind)
                 elif callable(sub):
-                    if spread:
-                        factory = self.spread_spec(sub)
-                    else:
-                        factory = sub
+                    factory = self.spread_spec(sub) if spread else sub
+                    for kind in kinds:
+                        reg.put_factory(factory, kind=kind)
                 else:
                     raise ValueError('Ooops!')
 
-                for kind in kinds:
-                    reg.debug('register({}): register kind [{}] as {}',
-                              class_qname(self.cls), kind, class_qname(factory))
-                    reg.put_factory(factory, kind=kind)
                 return sub
         else:
             def decorator(sub: type[T]) -> type[T]:
                 if kind := sub.__dict__.get('kind'):
                     if isinstance(sub, type):
-                        factory = getattr(sub, 'provide_from', sub)
+                        reg.put_implementation(sub, kind=kind)
                     elif callable(sub):
-                        if spread:
-                            factory = self.spread_spec(sub)
-                        else:
-                            factory = sub
+                        factory = self.spread_spec(sub) if spread else sub
+                        reg.put_factory(factory, kind=kind)
                     else:
                         raise ValueError('Ooops!')
-                    reg.debug('register({}): register kind [{}] as {}',
-                              class_qname(self.cls), kind, class_qname(factory))
-                    reg.put_factory(factory, kind=kind)
                 else:
                     raise ValueError(f'register({self.qname}): Must specify a kind or '
                                      f'have a class attribute for {class_qname(sub)}')
@@ -429,7 +326,7 @@ class ProtocolMeta(Meta):
 
 class ObjectMeta(Meta):
 
-    __slots__ = ['fields', 'own_fields', 'field_inits', 'slots']
+    __slots__ = ('fields', 'own_fields', 'field_inits', 'slots')
 
     cls: type['tensile.infrastructure.Object']
     fields: dict[str, Field]
@@ -450,13 +347,6 @@ class ObjectMeta(Meta):
                 base_meta.add_child(self)
                 bases.append(base_meta)
         self.bases = tuple(bases)
-
-        # if slots := cls.__dict__.get('__slots__', ()):
-        #     slots = set(slots)
-        # elif len(cls.__bases__) == 1:
-        #     pass
-        # else:
-        #     pass
 
         if issubclass(cls, RootObject):
             fields = {}
@@ -548,7 +438,8 @@ class ObjectMeta(Meta):
 
             # print('-' * 100)
 
-    def slot_names(self, name: str) -> Iterable[str]:
+    @staticmethod
+    def slot_names(name: str) -> Iterable[str]:
         return private_slot(name),
 
     def add_slot(self, cls: type, name: str, field_spec: Spec) -> None:
@@ -568,7 +459,7 @@ class ObjectMeta(Meta):
 
         init_fields = [f for f in self.fields.values() if Scope.is_instance(f.scope) and f.init]
 
-        init_fields.sort(key=lambda f: f.init_order)
+        init_fields.sort(key=lambda x: x.init_order)
 
         self.field_inits = tuple(f.init for f in init_fields)
 
@@ -584,15 +475,6 @@ class ObjectMeta(Meta):
                     f.update(this, val)
                 except Exception:
                     raise AttributeError(f'{f}: error on update')
-
-    @property
-    def class_fields(self) -> dict[str, Field]:
-        return {n: f for n, f in self.fields.items() if Scope.is_class(f.scope)}
-
-    @property
-    def instance_fields(self) -> dict[str, Field]:
-        return {n: f for n, f in self.fields.items() if Scope.is_instance(f.scope)}
-        # return [f for n, f in self.fields.items() if f.scope == 'instance']
 
     @property
     def updateable_fields(self) -> dict[str, Field]:
@@ -673,6 +555,7 @@ def provides_singleton(cls: type, *kinds) -> Callable[[T], T]:
     return meta.provide_singleton(*kinds)
 
 
+# noinspection PyShadowingNames
 def provides_from_type(cls: type, *types, spread: bool = False) -> Callable[[T], T]:
     meta = Meta.for_class(cls, build=True)
     return meta.provide_from_type(*types, spread=spread)
@@ -707,6 +590,8 @@ def alias(module: str, classes: Sequence[str|type]) -> None:
     else:
         raise ImportError(f'Cannot find module {module}')
 
+
+# noinspection PyShadowingNames
 def configure_coerce(cls: type[T], coerce: CoerceFunction) -> Meta:
     meta = Meta.for_class(cls, build=True)
     meta.coerce = coerce
