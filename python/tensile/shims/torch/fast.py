@@ -14,7 +14,8 @@ def rms_norm(x: Array, weight: Optional[Array] = None, eps: float = ...,  **kwar
     return F.rms_norm(x, shape, weight=weight, eps=eps)
 
 
-def rope(x: Array, dims: int,  *, traditional: bool = None, base: float = None, offset: Array|int = 0, **kwargs) -> Array:
+def rope(x: Array, dims: int,  *, traditional: bool = None, base: float = None, offset: Array|int = 0,
+         freqs: Array = None, **kwargs) -> Array:
     """
     x: (B, H, L, D)
     seq_positions: (L,) or None (defaults to arange)
@@ -30,8 +31,11 @@ def rope(x: Array, dims: int,  *, traditional: bool = None, base: float = None, 
         seq_positions += offset[..., None]
 
     half = D // 2
-    freq_seq = torch.arange(half, device=x.device)
-    inv_freq = 1.0 / (base ** (freq_seq / half))
+    if base is None:
+        inv_freq = 1.0 / torch.detach(freqs)
+    else:
+        freq_seq = torch.arange(half, device=x.device)
+        inv_freq = 1.0 / (base ** (freq_seq / half))
 
     # (L, half)
     angles = torch.outer(seq_positions, inv_freq)
