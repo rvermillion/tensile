@@ -11,6 +11,10 @@
 # from .shims.mlx import core as ten
 # from .shims import torch as ten
 
+from . import infrastructure, util
+
+infra = infrastructure
+
 from .shims import ten
 
 Array = ten.Array
