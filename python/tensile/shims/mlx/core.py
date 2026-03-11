@@ -102,6 +102,7 @@ from mlx.core import (
     take, take_along_axis,
     save_safetensors,
     pad,
+    rsqrt,
     contiguous,
     swapaxes, transpose,
     broadcast_to,
