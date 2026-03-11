@@ -9,6 +9,7 @@ from ..module import *
 def dropout_type(d: int) -> str:
     return 'Dropout' if d == 1 else f'Dropout{d}D'
 
+
 @provides(Module, 'dropout')
 class Dropout(CompiledModule):
     r"""Randomly zero a portion of the elements during training.

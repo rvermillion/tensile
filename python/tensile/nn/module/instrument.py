@@ -1,9 +1,6 @@
 #  Copyright (c) 2026. Richard Vermillion. All Rights Reserved.
 
-from ...shims import ten
-
-from ...infrastructure import Object, field
-from ...infrastructure.types import Annotated, Callable, Optional, Protocol, TypeVar, TYPE_CHECKING
+from ..common import ten, Object, field, Annotated, Callable, Optional, Protocol, TypeVar, TYPE_CHECKING
 
 if TYPE_CHECKING:
     import tensile.nn.module

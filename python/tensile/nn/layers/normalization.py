@@ -1,8 +1,7 @@
 #  Copyright (c) 2026. Richard Vermillion. All Rights Reserved.
 
 from ..common import Annotated, Callable, Optional, ten, field, provides
-
-from ..module import CompiledModule, Module, ModuleArgs
+from ..module import CompiledModule, ModuleArgs
 
 
 class NormalizationArgs(ModuleArgs):

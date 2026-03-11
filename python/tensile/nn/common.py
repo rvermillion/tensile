@@ -4,7 +4,10 @@ from typing import (Annotated, Any, Callable, ClassVar, Generic, Iterable, Itera
                     Protocol, Sequence, Self, TYPE_CHECKING, TypeAlias, TypeVar, Union)
 
 from ..shims import ten, Array, DType, Shape
-from ..infrastructure import Predicate, PredicateLike, Object, coerce, meta, field, provides, Spec, Transform, TransformLike, tree
+from ..infrastructure import (
+    Predicate, PredicateLike, Object, coerce, meta, field, predicates,
+    provides, Spec, Transform, TransformLike, tree
+)
 from ..infrastructure.tree import Tree, TreeEntry
 from ..infrastructure.types import Factory, Keywords, PredicateFunction, TransformFunction, JSON
 
@@ -54,9 +57,10 @@ __all__ = [
     'TypeVar',
     'TYPE_CHECKING',
     'Union',
+    'coerce',
     'field',
     'meta',
-    'coerce',
+    'predicates',
     'provides',
     'ten',
     'tree',

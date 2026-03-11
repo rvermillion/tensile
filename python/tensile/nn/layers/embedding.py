@@ -1,7 +1,7 @@
 #  Copyright (c) 2025. Richard Vermillion. All Rights Reserved.
 
 import math
-from tensile.infrastructure import field
+
 from ..common import *
 from ..module import CompiledModule
 from ..quantization import QuantizableModuleArgs

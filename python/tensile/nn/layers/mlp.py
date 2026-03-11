@@ -1,9 +1,6 @@
 #  Copyright (c) 2025. Richard Vermillion. All Rights Reserved.
-from collections.abc import Iterable
-from typing import Annotated, Any, Callable, ClassVar, Optional, Sequence
 
-from tensile.infrastructure import Spec, meta, coerce, provides, field
-from ..common import Activation, Array, DType, ten
+from ..common import *
 from ..module import CompiledModule, ModuleArgs, Module
 from ..util import nilpotent
 from .linear import LinearArgs

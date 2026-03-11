@@ -1,10 +1,8 @@
 #  Copyright (c) 2026. Richard Vermillion. All Rights Reserved.
+
 import contextlib
 
-from ...shims import ten
-
-from ...infrastructure import Object, field
-from ...infrastructure.types import Annotated, Any, ClassVar, Optional, Self, TypeVar, TYPE_CHECKING
+from ..common import ten, Object, field, Annotated, Any, ClassVar, Optional, Self, TypeVar, TYPE_CHECKING
 
 
 if TYPE_CHECKING:

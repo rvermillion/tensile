@@ -4,15 +4,9 @@ import textwrap
 from pathlib import Path
 from typing import final
 
-from ...infrastructure import Object, Predicate, field, meta, tree, predicates
-from ...infrastructure.tree import TreeEntry
-from ...infrastructure.types import (
-    Annotated, Any, Callable, ClassVar, Coercer, Iterable, Mapping, Optional,
-    PredicateFunction, Self, Setter, Spec,
-    TypeVar, Union, is_protocol
-)
+from ...infrastructure.types import Coercer, Setter, is_protocol
+from ..common import *
 from ...infrastructure.util import join_str, name_function, noop, tie_call
-from ...shims import Array, Shape, ten
 
 from .args import ModuleArgs
 from .context import ForwardContext
