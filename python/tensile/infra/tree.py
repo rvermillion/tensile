@@ -78,7 +78,7 @@ class TreeEntry(tuple[str, T]):
     parent: Optional['TreeEntry[T]']
     step: TreeStep
 
-    def __new__(cls, path: str, value: Tree[T], parent: Optional['TreeEntry[T]'], step: TreeStep):
+    def __new__(cls, path: str, value: T, parent: Optional['TreeEntry[T]'], step: TreeStep):
         e = tuple.__new__(cls, (path, value))
         e.parent = parent
         e.step = step
@@ -89,7 +89,7 @@ class TreeEntry(tuple[str, T]):
         return self[0]
 
     @property
-    def value(self) -> Tree[T]:
+    def value(self) -> T:
         return self[1]
 
     # node = value
@@ -596,7 +596,7 @@ def traverse(
     parent_first: bool = True,
     force_descend: bool = False,
     traverser: Traverser = None,
-) -> Iterable[TreeEntry]:
+) -> Iterable[TreeEntry[T]]:
     """Flattens a Python tree to a list of key, value tuples.
 
     The keys are using the dot notation to define trees of arbitrary depth and
@@ -711,7 +711,7 @@ def apply(
 
 # noinspection PyShadowingNames
 def flatten(
-    tree: Tree,
+    tree: Tree[T],
     prefix: str = "",
     is_leaf: TreePredicateFunction = None,
     include: TreePredicateFunction = None,
@@ -720,7 +720,7 @@ def flatten(
     parent_first: bool = True,
     force_descend: bool = False,
     traverser: Traverser = None,
-) -> list[TreeEntry]:
+) -> list[TreeEntry[T]]:
     if traverser is None:
         traverser = Traverser(is_leaf=is_leaf, include_intermediate=include_intermediate, include=include, descend=descend, parent_first=parent_first)
     return list(traverse(tree, prefix=prefix, traverser=traverser, force_descend=force_descend))

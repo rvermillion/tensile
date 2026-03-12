@@ -19,8 +19,15 @@ LossAndGradFunction = Callable[[Batch], tuple[Array, Tree[Array]]]
 
 
 backend_classes = {
-    'sgd': optim.SGD,
+    'adadelta': optim.AdaDelta,
+    'adafactor': optim.Adafactor,
+    'adamax': optim.Adamax,
+    'adam': optim.Adam,
     'adamw': optim.AdamW,
+    'lion': optim.Lion,
+    'muon': optim.Muon,
+    'rmsprop': optim.RMSprop,
+    'sgd': optim.SGD,
 }
 
 backend_aliases = {}

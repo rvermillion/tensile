@@ -9,9 +9,15 @@ from tensile.optim.optimizer import Optimizer, OptimizerParamGroup, OptimizerSte
 
 
 backend_classes = {
-    'sgd': optim.SGD,
+    'adadelta': optim.Adadelta,
+    'adafactor': optim.Adafactor,
+    'adamax': optim.Adamax,
+    'adam': optim.Adam,
     'adamw': optim.AdamW,
+    'rmsprop': optim.RMSprop,
+    'sgd': optim.SGD,
 }
+
 
 backend_aliases = {
     'learning_rate': 'lr',
@@ -116,7 +122,7 @@ class TorchOptimizer(Optimizer[Batch]):
             loss.backward()
 
             if grad_handlers:
-                flat_grads = [e for e in tree.flatten(self.trainable_parameters()) if e[1].grad is not None]
+                flat_grads = [e for e in tree.flatten(self.trainable_parameters()) if e.value.grad is not None]
                 for grad_handler in grad_handlers:
                     grad_handler(self, flat_grads)
 

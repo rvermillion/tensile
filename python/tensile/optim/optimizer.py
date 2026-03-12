@@ -1,7 +1,7 @@
 #  Copyright (c) 2025. Richard Vermillion. All Rights Reserved.
+
 from ..infra import RootObject
 from ..infra.util import StringBuffer
-from ..util.stats import get_stats
 from ..nn import Module
 from ..nn.common import *
 
