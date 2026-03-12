@@ -150,6 +150,9 @@ class ArrayBuffer(RootObject):
                 item += self.length
             if 0 <= item < self.length:
                 return self.buffer[self.index(item)]
+            if item == self.length:
+                self.extend(self.length+1)
+                return self.buffer[self.index(item)]
             raise IndexError(f"Index {item} is out of bounds for the buffer")
         raise IndexError(f"Invalid index type: {type(item)}")
 
