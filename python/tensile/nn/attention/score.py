@@ -46,8 +46,7 @@ class AttentionScores(RootObject):
 
         new_exp = ten.where(finite, ten.exp(logits - new_max), 0.0)
 
-        new_sumexp = self.sumexp * old_exp
-        new_sumexp += ten.sum(new_exp, axis=-1, keepdims=True)
+        new_sumexp = ten.sum(new_exp, axis=-1, keepdims=True) + self.sumexp * old_exp
 
         new_values = ten.matmul(new_exp, values) + self.values * old_exp
 
@@ -70,11 +69,9 @@ class AttentionScores(RootObject):
 
         new_exp = ten.exp(logits - new_max)
 
-        new_sumexp = self.sumexp * old_exp
-        new_sumexp += ten.sum(new_exp, axis=-1, keepdims=True)
+        new_sumexp = self.sumexp * old_exp + ten.sum(new_exp, axis=-1, keepdims=True)
 
-        new_values = self.values * old_exp
-        new_values += ten.matmul(new_exp, values)
+        new_values = self.values * old_exp + ten.matmul(new_exp, values)
 
         self.sumexp = new_sumexp
         self.values = new_values
