@@ -7,10 +7,11 @@ from tensile.nn import Module
 from tensile.nn.common import *
 
 from tensile.optim.optimizer import (
-    Optimizer, OptimizerParamGroup, BaseSGDOptimizer,
-    BaseAdamWOptimizer,
+    Optimizer, OptimizerParamGroup, SGDOptimizer,
+    AdamWOptimizer,
 )
-from tensile.optim.types import GradientHandler, OptimizerStep, TrainFunction, Batch
+from tensile.optim.schedule import call_every
+from tensile.optim.types import *
 
 
 ModelUpdater = Callable[[Module, tree.Tree[Array]], Array]
@@ -40,7 +41,7 @@ class MLXOptimizer(Optimizer[Batch]):
         def inner_fn(params, batch: Batch) -> Array:
             # print('inner model.embed_tokens.weight:', id(params['model']['embed_tokens']['weight']))
             model.update(params)
-            return train_fn(model, batch)
+            return train_fn(batch)
 
         value_grad_fn = mx.value_and_grad(inner_fn)
 
@@ -55,36 +56,41 @@ class MLXOptimizer(Optimizer[Batch]):
         return wrapped_value_grad_fn
 
 
-    def stepper(self, model: Module, train_fn: TrainFunction[Batch],
+    def stepper(self, train_fn: TrainFunction[Batch], *,
                 grad_handlers: Sequence[GradientHandler] = None,
-                update: ModelUpdater = None, microbatch_size: int = None) -> OptimizerStep[Batch]:
+                start_step: OptimizerStartStep = None,
+                end_step: OptimizerEndStep = None,
+                eval_every: int = 1,
+                microbatch_size: int = None,
+                **kwargs) -> OptimizerStep[Batch]:
 
+        model = self.model
         loss_and_grad_fn: LossAndGradFunction[Batch] = self.loss_and_grad_fn(model, train_fn)
 
         if len(self.param_groups) > 1:
             raise NotImplementedError("Multi-parameter group optimizers are not supported yet")
 
         optimizers: Iterable[optim.Optimizer] = self.backend
-        eval_every = 1
 
         def eval_params():
             states = [opt.state for opt in optimizers]
             ten.eval(model.parameters(), *states)
             return True
 
-        # if eval_every > 1:
-        #     eval_params = Trainer.call_every(eval_every, eval_params)
+        if eval_every > 1:
+            eval_params = call_every(eval_every, eval_params)
 
-        def update(mod: Module, grads: tree.Tree[Array]):
+        def update(grads: tree.Tree[Array]):
             for optimizer, param_group in zip(optimizers, self.param_groups):
                 # pick out just the right grads for each optimizer
-                optimizer.update(mod, param_group.filter_tree(grads))
+                optimizer.update(model, param_group.filter_tree(grads))
             return True
 
         def step(batch: Batch) -> Array:
             # x, y = batch.data
             # ten.debug_eval(batch.data)
             self.start_step(batch)
+            if start_step: start_step(self, batch)
 
             loss, grads = loss_and_grad_fn(batch)
 
@@ -96,10 +102,12 @@ class MLXOptimizer(Optimizer[Batch]):
                     grad_handler(self, flat_grads)
 
             # Update the model with the gradients. So far no computation has happened.
-            update(model, grads)
+            update(grads)
 
+            # Evaluate the parameters and optimizer state
             eval_params()
 
+            if end_step: end_step(self, loss, batch)
             self.finish_step(loss, batch)
             return loss
 
@@ -107,23 +115,23 @@ class MLXOptimizer(Optimizer[Batch]):
 
 
 @provides(Optimizer, 'sgd')
-class SGDOptimizer(BaseSGDOptimizer, MLXOptimizer):
+class MLXSGDOptimizer(SGDOptimizer, MLXOptimizer):
 
     __slots__ = ()
 
     def build_backend(self, param_group: OptimizerParamGroup) -> optim.Optimizer:
-        schedules = param_group.schedules.alias(include_constant=True, aliases=self.aliases)
-        return optim.SGD(**schedules, **self.backend_spec())
+        schedules = param_group.schedules.alias(include_constant=True, aliases=self.hyperparameter_aliases)
+        return optim.SGD(**schedules, **self.backend_hyperparameters())
 
 
 @provides(Optimizer, 'adamw')
-class AdamWOptimizer(BaseAdamWOptimizer, MLXOptimizer):
+class MLXAdamWOptimizer(AdamWOptimizer, MLXOptimizer):
 
     __slots__ = ()
 
     def build_backend(self, param_group: OptimizerParamGroup) -> optim.Optimizer:
-        schedules = param_group.schedules.alias(include_constant=True, aliases=self.aliases)
-        return optim.AdamW(**schedules, **self.backend_spec())
+        schedules = param_group.schedules.alias(include_constant=True, aliases=self.hyperparameter_aliases)
+        return optim.AdamW(**schedules, **self.backend_hyperparameters())
         #     learning_rate=self.learning_rate,
         #     weight_decay=self.weight_decay,
         #     betas=self.betas,

@@ -1,6 +1,7 @@
 #  Copyright (c) 2025. Richard Vermillion. All Rights Reserved.
 
 import types
+from typing import ParamSpec
 
 from ..nn.common import *
 
@@ -257,3 +258,19 @@ class CosineLRSchedule(WarmupLRSchedule):
 
     def _repr_args(self, **options) -> str:
         return super()._repr_args(**options) + f', total={self.total_steps}, min_lr={self.min_lr}'
+
+
+P = ParamSpec('P')
+
+
+def call_every(n: int, fn: Callable[P, bool], start: int = 1) -> Callable[P, bool]:
+    i = start
+    def inner(*args: P.args, **kwargs: P.kwargs):
+        nonlocal i
+        if i % n == 0:
+            i += 1
+            return fn(*args, **kwargs)
+        else:
+            i += 1
+            return False
+    return inner

@@ -5,7 +5,10 @@ from ..nn import Module
 from ..nn.common import *
 
 from .schedule import LRSchedule, OptimizerSchedule
-from .types import OptimizerStep, OptimizerStepHandler, TrainFunction, Batch
+from .types import (
+    GradientHandler, OptimizerStep, OptimizerStepHandler, TrainFunction, Batch,
+    OptimizerStartStep, OptimizerEndStep
+)
 
 
 class BasicStepHandler(RootObject, Generic[Batch]):
@@ -141,8 +144,8 @@ class Optimizer(Object, Generic[Batch]):
     )]
 
     schedule_names: ClassVar[tuple[str, ...]] = ('learning_rate', )
-    spec_names: ClassVar[tuple[str, ...]] = ()
-    aliases: ClassVar[dict[str, str]] = {}
+    hyperparameter_names: ClassVar[tuple[str, ...]] = ()
+    hyperparameter_aliases: ClassVar[dict[str, str]] = {}
 
     def _coerce_param_groups(self, param_groups: Any) -> Optional[list[OptimizerParamGroup]]:
         if param_groups is None: return None
@@ -187,7 +190,7 @@ class Optimizer(Object, Generic[Batch]):
                     if name in other.params:
                         raise ValueError(f'Duplicate parameter name: {name}')
 
-    def trainable_parameters(self, model: Module = None, group: int = None):
+    def trainable_parameters(self, model: Module = None, group: int = None) -> Tree[Array]:
         if model is None: model = self.model
 
         if group is None:
@@ -198,61 +201,70 @@ class Optimizer(Object, Generic[Batch]):
         if step_handler := self.step_handler:
             step_handler.on_start(self, batch)
 
-    def get_hyperparameters(self) -> dict[str, Any]:
-        stats = {}
+    def get_hyperparameters(self, group: int = None) -> dict[str, Any]:
         step = self.current_step
-        for g, param_group in enumerate(self.param_groups):
+        if group is None:
+            hyper = {}
+            for g, param_group in enumerate(self.param_groups):
+                if schedule := param_group.current_schedule(step, include_constant=True):
+                    hyper[str(g)] = {n: s for n, s in schedule.items()}
+        else:
+            param_group = self.param_groups[group]
             if schedule := param_group.current_schedule(step, include_constant=True):
-                stats[str(g)] = {n: s for n, s in schedule.items()}
-        return stats
+                hyper = {n: s for n, s in schedule.items()}
+            else:
+                hyper = {}
+        return hyper
 
     def finish_step(self, loss: Array, batch: Batch) -> None:
         if step_handler := self.step_handler:
             step_handler.on_end(self, loss, batch)
         self.current_step += 1
 
-    def grad_stats(self, grads: Iterable[tuple[str, Array]]) -> dict[str, Any]:
-        return get_stats(grads)
-
     def default_schedules(self) -> OptimizerSchedules:
         return OptimizerSchedules({name: getattr(self, name) for name in self.schedule_names})
 
     def current_schedule(self, param_group: int = 0) -> dict[str, float]:
-        return self.param_groups[param_group].schedules.get(self.current_step, aliases=self.aliases)
+        return self.param_groups[param_group].schedules.get(self.current_step, aliases=self.hyperparameter_aliases)
 
-    def stepper(self, model: Module, train_fn: TrainFunction[Batch]) -> OptimizerStep[Batch]:
+    def stepper(self, train_fn: TrainFunction[Batch], *,
+                grad_handlers: Sequence[GradientHandler] = None,
+                start_step: OptimizerStartStep = None,
+                end_step: OptimizerEndStep = None,
+                **kwargs,
+                ) -> OptimizerStep[Batch]:
         raise NotImplementedError()
 
-    def alias_spec(self, name: str) -> str:
-        return self.aliases.get(name, name)
+    def alias_hyperparameter(self, name: str) -> str:
+        return self.hyperparameter_aliases.get(name, name)
 
     def backend_schedules(self, current: bool = True) -> dict[str, Any]:
-        spec = {}
+        hyper = {}
         if current:
             step = self.current_step
             for name in self.schedule_names:
                 schedule = getattr(self, name)
                 if schedule is not None:
-                    alias = self.alias_spec(name)
-                    spec[alias] = schedule(step)
+                    alias = self.alias_hyperparameter(name)
+                    hyper[alias] = schedule(step)
         else:
             for name in self.schedule_names:
                 schedule = getattr(self, name)
                 if schedule is not None:
-                    alias = self.alias_spec(name)
-                    spec[alias] = schedule
-        return spec
+                    alias = self.alias_hyperparameter(name)
+                    hyper[alias] = schedule
+        return hyper
 
-    def backend_spec(self) -> dict[str, Any]:
-        spec = {}
-        for name in self.spec_names:
+    def backend_hyperparameters(self) -> dict[str, Any]:
+        hyper = {}
+        for name in self.hyperparameter_names:
             value = getattr(self, name)
             if value is not None:
-                spec[name] = value
-        return spec
+                hyper[name] = value
+        return hyper
 
 
-class BaseSGDOptimizer(Optimizer):
+class SGDOptimizer(Optimizer):
 
     __slots__ = ('momentum', 'weight_decay', 'dampening', 'nesterov')
 
@@ -270,7 +282,7 @@ class BaseSGDOptimizer(Optimizer):
     )]
 
     schedule_names = (*Optimizer.schedule_names, 'momentum', 'weight_decay', 'dampening')
-    spec_names = ('nesterov',)
+    hyperparameter_names = ('nesterov',)
 
     def _coerce_momentum(self, spec: Any) -> Optional[OptimizerSchedule]:
         if spec is None: return None
@@ -295,7 +307,7 @@ class BaseSGDOptimizer(Optimizer):
         return coerced
 
 
-class BaseAdamWOptimizer(Optimizer):
+class AdamWOptimizer(Optimizer):
 
     __slots__ = ('weight_decay', 'betas',)
 
@@ -307,7 +319,7 @@ class BaseAdamWOptimizer(Optimizer):
     )]
 
     schedule_names = (*Optimizer.schedule_names, 'weight_decay')
-    spec_names = ('eps', 'betas')
+    hyperparameter_names = ('eps', 'betas')
 
     def _coerce_weight_decay(self, spec: Any) -> Optional[OptimizerSchedule]:
         if spec is None: return None

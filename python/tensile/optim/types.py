@@ -2,7 +2,7 @@
 
 from tensile import Array
 from tensile.nn import Module
-from tensile.infra.types import Iterable, Protocol, TypeVar, TYPE_CHECKING
+from tensile.infra.types import Callable, Iterable, Protocol, TypeVar, TYPE_CHECKING
 
 if TYPE_CHECKING:
     import tensile.optim.optimizer
@@ -15,12 +15,12 @@ Outputs = TypeVar('Outputs')
 
 class TrainFunction(Protocol[Batch]):
 
-    def __call__(self, model: Module, batch: Batch) -> Array: ...
+    def __call__(self, batch: Batch) -> Array: ...
 
 
 class PredictFunction(Protocol[Inputs, Outputs]):
 
-    def __call__(self, model: Module, inputs: Inputs) -> Outputs: ...
+    def __call__(self, inputs: Inputs) -> Outputs: ...
 
 
 class PredictionHandler(Protocol[Batch, Outputs]):
@@ -36,6 +36,10 @@ class OptimizerStep(Protocol[Batch]):
 class GradientHandler(Protocol):
 
     def __call__(self, optimizer: 'tensile.optim.optimizer.Optimizer', grads: Iterable[tuple[str, Array]]) -> None: ...
+
+
+OptimizerStartStep = Callable[['tensile.optim.optimizer.Optimizer[Batch]', Batch], None]
+OptimizerEndStep = Callable[['tensile.optim.optimizer.Optimizer[Batch]', Array, Batch], None]
 
 
 class OptimizerStepHandler(Protocol[Batch]):
