@@ -311,7 +311,7 @@ class RotationalTransformerBlock(DecoderLayer):
 
             b[..., reference_dim] += 1.
 
-            b_norm = normalize(b)
+            b_norm = ten.norm(b)
 
             x_f32 = ensure_f32(x)
             b_f32 = ensure_f32(b_norm)
@@ -384,11 +384,11 @@ class LearnedReferenceRotationalTransformerBlock(DecoderLayer):
             """
             x_norm = input_layernorm(x)
 
-            a = normalize(reference_vector)
+            a = ten.norm(reference_vector)
 
             b_delta = self_attn(x_norm, call, cache)
 
-            b = normalize(b_delta + a)
+            b = ten.norm(b_delta + a)
 
             # b_delta = (b-a)[0]
 
