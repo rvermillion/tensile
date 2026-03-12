@@ -262,16 +262,26 @@ class TreeEntry(tuple[str, T]):
                ) -> Tree:
         if traverser.descend(self) or force_descend:
             if self.is_enumerable:
-                return [c.unflat(map_fn=map_fn, traverser=traverser) for c in self.children()]
-            if self.has_items:
+                unflat = []
+                keep = False
+                for c in self.children():
+                    val = c.unflat(map_fn=map_fn, traverser=traverser)
+                    unflat.append(val)
+                    if ten.is_array(val) or val:
+                        keep = True
+                if keep:
+                    return unflat
+                return []
+                # return [c.unflat(map_fn=map_fn, traverser=traverser) for c in self.children()]
+            elif self.has_items:
                 unflat = {}
                 for c in self.children():
                     val = c.unflat(map_fn=map_fn, traverser=traverser)
-                    if val is not None:
+                    if ten.is_array(val) or val:
                         unflat[c.step] = val
                 if unflat:
                     return unflat
-        return map_fn(self) if traverser.include(self) else None
+        return map_fn(self) if traverser.include(self) else {}
 
     def entries(self,
                 is_leaf: Optional[Callable] = None,
