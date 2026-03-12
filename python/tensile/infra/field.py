@@ -255,6 +255,8 @@ class FieldType(RootObject):
                 qname = class_qname(origin)
                 # print(f'Problem processing union annotation: {anno} with args {args}')
                 origin = object
+            elif isinstance(anno, TypeVar):
+                origin = object
             else:
                 print(f'Problem processing annotation: {anno} with origin {origin}')
                 raise MetaError(f'Problem processing annotation: {anno} with origin {origin}')
