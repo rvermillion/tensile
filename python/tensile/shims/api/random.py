@@ -1,4 +1,4 @@
-#  Copyright (c) 2025. Richard Vermillion. All Rights Reserved.
+#  Copyright (c) 2025-2026. Richard Vermillion. All Rights Reserved.
 from .types import Array, ArrayLike, DType, ShapeLike
 
 def normal(loc: ArrayLike = 0.0, scale: ArrayLike = 1.0, shape: ShapeLike = ...) -> Array: ...

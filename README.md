@@ -70,6 +70,10 @@ This makes experiment configuration declarative and keeps implementation details
 
 ## What else is in here
 
+**tensile.infa** an infrastructure library for writing objects with smart fields that take part in a registry that uses a provides/coerce pattern.
+
+**tensile.nn** a new base Module class that supports compiling modules and easily instrumenting them.
+
 **NumPy backend** (partial). A subset of the API works with NumPy arrays, useful for testing and non-training workloads.
 
 **Predicate library.** A composable predicate system used internally for parameter filtering, tree operations, and configuration logic. Supports logical composition (and, or, xor, not) with proper implication dispatch.

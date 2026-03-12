@@ -4,6 +4,7 @@ from ..shims import ten
 from . import optimizer, schedule, types
 
 from .optimizer import Optimizer, OptimizerStep
+from .types import TrainFunction, PredictFunction
 from .schedule import OptimizerSchedule, LRSchedule
 
 

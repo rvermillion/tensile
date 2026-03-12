@@ -1,4 +1,4 @@
-#  Copyright (c) 2025. Richard Vermillion. All Rights Reserved.
+#  Copyright (c) 2025-2026. Richard Vermillion. All Rights Reserved.
 
 from typing import (Annotated, Any, Callable, ClassVar, Generic, Iterable, Iterator, Mapping, Optional,
                     Protocol, Sequence, Self, TYPE_CHECKING, TypeAlias, TypeVar, Union)

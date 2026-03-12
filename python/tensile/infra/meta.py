@@ -1,4 +1,4 @@
-#  Copyright (c) 2025. Richard Vermillion. All Rights Reserved.
+#  Copyright (c) 2025-2026. Richard Vermillion. All Rights Reserved.
 import sys
 
 from .types import *
