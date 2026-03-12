@@ -28,6 +28,16 @@ class LRSchedule(Protocol):
     def __call__(self, step: Array) -> Array: ...
 
 
+def coerce_lr_schedule(spec: Any = None, /, **kwargs) -> Any:
+    if isinstance(spec, BaseSchedule):
+        return spec
+    return lr_meta.default_coerce(spec, **kwargs)
+
+
+lr_meta = meta.Meta.for_class(LRSchedule, build=True)
+lr_meta.coerce = coerce_lr_schedule
+
+
 @provides(OptimizerSchedule, 'function')
 @provides(LRSchedule, 'function')
 class FunctionSchedule(OptimizerSchedule):
@@ -40,6 +50,7 @@ class FunctionSchedule(OptimizerSchedule):
         return self.schedule(step)
 
 
+@meta.provides_from_type(LRSchedule, types.FunctionType, types.MethodType)
 @meta.provides_from_type(OptimizerSchedule, types.FunctionType, types.MethodType)
 def provide_function(schedule: Callable[[Array], Array]) -> FunctionSchedule:
     return FunctionSchedule(schedule=schedule)
@@ -61,6 +72,7 @@ class ConstantSchedule(OptimizerSchedule):
         return self.value
 
 
+@meta.provides_from_type(LRSchedule, int, float)
 @meta.provides_from_type(OptimizerSchedule, int, float)
 def provide_constant(value: int | float) -> ConstantSchedule:
     return ConstantSchedule(value=ten.array(value))

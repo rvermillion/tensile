@@ -2,35 +2,70 @@
 
 import torch.optim as optim
 
-from tensile.nn import Module
 from tensile.nn.common import *
 
 from tensile.optim.types import *
-from tensile.optim.optimizer import Optimizer, OptimizerStep, SGDOptimizer, AdamWOptimizer
+from tensile.optim.optimizer import Optimizer, OptimizerParamGroup, OptimizerStep
 
 
+backend_classes = {
+    'sgd': optim.SGD,
+    'adamw': optim.AdamW,
+}
 
+backend_aliases = {
+    'learning_rate': 'lr',
+}
+
+
+@provides(Optimizer, 'torch')
 class TorchOptimizer(Optimizer[Batch]):
 
-    __slots__ = ()
+    __slots__ = ('groups_per_backend',)
 
-    backend: Annotated[optim.Optimizer, field(
-        doc='The backend for this optimizer.'
+    backends: Annotated[list[optim.Optimizer], field(
+        doc='The backends for this optimizer.'
+    )]
+    groups_per_backend: Annotated[list[list[OptimizerParamGroup]], field(
+        doc='The parameter groups per backend.',
+        default_factory=list,
     )]
 
     hyperparameter_aliases = {'learning_rate': 'lr'}
 
-    def _lazy_backend(self) -> optim.Optimizer:
-        raise TypeError(f'{self.__class__.__name__} must implement _lazy_backend')
+    def _lazy_backends(self) -> list[optim.Optimizer]:
+        backends = {}
+        for param_group in self.param_groups:
+            algo = param_group.config.algorithm
+            if groups := backends.get(algo):
+                groups.append(param_group)
+            else:
+                backends[algo] = [param_group]
+        return [self.build_backend(algo, param_groups) for algo, param_groups in backends.items()]
+
+    def build_backend(self, algo: str, param_groups: list[OptimizerParamGroup]) -> optim.Optimizer:
+        backend_groups = []
+        cls = backend_classes[algo]
+        step = self.current_step
+        for param_group in param_groups:
+            params = param_group.filter_params(self.model)
+            backend_groups.append({
+                'params': params,
+                **param_group.schedules.get(step, aliases=self.hyperparameter_aliases)
+            })
+        self.groups_per_backend.append(param_groups)
+        return cls(backend_groups, **self.backend_hyperparameters())
 
     def start_step(self, batch: Batch) -> None:
         super().start_step(batch)
         self.schedule_backend()
 
     def schedule_backend(self):
-        for g, param_group in enumerate(self.backend.param_groups):
-            if schedule := self.current_schedule(g):
-                param_group.update(schedule)
+        step = self.current_step
+        for backend, param_groups in zip(self.backends, self.groups_per_backend):
+            for backend_group, param_group in zip(backend.param_groups, param_groups):
+                if schedule := param_group.schedules.get(step, include_constant=False):
+                    backend_group.update(schedule)
 
     @property
     def lr(self) -> float:
@@ -51,14 +86,28 @@ class TorchOptimizer(Optimizer[Batch]):
                 **kwargs,
                 ) -> OptimizerStep[Batch]:
 
-        optimizer = self.backend
+        optimizers = self.backends
+        if len(optimizers) == 1:
+            optimizer = optimizers[0]
+
+            zero_grad = optimizer.zero_grad
+
+            optimizer_step = optimizer.step
+        else:
+            def zero_grad():
+                for opt in optimizers:
+                    opt.zero_grad()
+
+            def optimizer_step() -> None:
+                for opt in optimizers:
+                    opt.step()
 
         def step(batch: Batch) -> Array:
             # x, y = batch.data
             self.start_step(batch)
             if start_step: start_step(self, batch)
 
-            optimizer.zero_grad()
+            zero_grad()
 
             loss = train_fn(batch)
 
@@ -73,77 +122,15 @@ class TorchOptimizer(Optimizer[Batch]):
 
             ten.get_active_memory()
 
-            optimizer.step()
+            optimizer_step()
 
             detached_loss = ten.detach(loss)
             if end_step: end_step(self, detached_loss, batch)
             self.finish_step(detached_loss, batch)
             return loss
 
+
         return step
-
-
-@provides(Optimizer, 'sgd')
-class TorchSGDOptimizer(SGDOptimizer, TorchOptimizer):
-
-    __slots__ = ()
-
-    # def schedules(self, param_group: int = 0) -> dict[str, OptimizerSchedule]:
-    #     return add_to_schedules(
-    #         lr=self.learning_rate,
-    #         # momentum=self.momentum,
-    #         # weight_decay=self.weight_decay,
-    #         # dampening=self.dampening,
-    #     )
-
-    def _lazy_backend(self) -> optim.Optimizer:
-        param_groups = []
-        step = self.current_step
-        for param_group in self.param_groups:
-            params = param_group.filter_params(self.model)
-            param_groups.append({
-                'params': params,
-                **param_group.schedules.get(step, aliases=self.hyperparameter_aliases)
-            })
-        return optim.SGD(param_groups, **self.backend_hyperparameters())
-
-        # return optim.SGD(params, **add_args(
-        #     self.current_schedule(),
-        #     lr=self.lr,
-        #     momentum=self.momentum,
-        # ))
-
-
-@provides(Optimizer, 'adamw')
-class TorchAdamWOptimizer(AdamWOptimizer, TorchOptimizer):
-
-    __slots__ = ()
-
-    # def schedules(self, param_group: int = 0) -> dict[str, OptimizerSchedule]:
-    #     return add_to_schedules(
-    #         lr=self.learning_rate,
-    #         weight_decay=self.weight_decay,
-    #     )
-
-    def _lazy_backend(self) -> optim.Optimizer:
-        param_groups = []
-        step = self.current_step
-        for param_group in self.param_groups:
-            params = param_group.filter_params(self.model)
-            param_groups.append({
-                'params': params,
-                **param_group.schedules.get(step, aliases=self.hyperparameter_aliases)
-            })
-        return optim.AdamW(param_groups, **self.backend_hyperparameters())
-        # params = self.param_groups[0].filter_params(self.model)
-        # return optim.AdamW(params, **self.backend_spec())
-        # return optim.AdamW(params, **add_args(
-        #     self.current_schedule(),
-        #     lr=self.lr,
-        #     weight_decay=self.weight_decay,
-        #     betas=self.betas,
-        #     eps=self.eps,
-        # ))
 
 
 def add_args(opt: dict[str, Any], **kwargs) -> dict[str, Any]:
