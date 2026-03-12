@@ -1,6 +1,6 @@
 #  Copyright (c) 2025. Richard Vermillion. All Rights Reserved.
 
-import tensile.infrastructure.meta as _meta
+import tensile.infra.meta as _meta
 
 from .transformer import DecoderLayer, TransformerBlock
 from .dropout import Dropout

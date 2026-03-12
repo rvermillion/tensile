@@ -4,12 +4,12 @@ from typing import (Annotated, Any, Callable, ClassVar, Generic, Iterable, Itera
                     Protocol, Sequence, Self, TYPE_CHECKING, TypeAlias, TypeVar, Union)
 
 from ..shims import ten, Array, DType, Shape
-from ..infrastructure import (
+from ..infra import (
     Predicate, PredicateLike, Object, coerce, meta, field, predicates,
     provides, Spec, Transform, TransformLike, tree
 )
-from ..infrastructure.tree import Tree, TreeEntry
-from ..infrastructure.types import Factory, Keywords, PredicateFunction, TransformFunction, JSON
+from ..infra.tree import Tree, TreeEntry
+from ..infra.types import Factory, Keywords, PredicateFunction, TransformFunction, JSON
 
 
 class Activation(Protocol):

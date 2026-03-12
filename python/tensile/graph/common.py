@@ -4,8 +4,8 @@ from typing import (Any, Callable, Iterable, Optional, Self, Sequence,
                     TypeAlias, Union, TYPE_CHECKING)
 
 from ..shims import core as ten
-from ..infrastructure.log import Logging
-from ..infrastructure.represent import Representable
+from ..infra.log import Logging
+from ..infra.represent import Representable
 
 
 

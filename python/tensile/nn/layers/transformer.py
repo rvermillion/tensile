@@ -84,11 +84,11 @@ class DecoderLayer(CompiledModule):
         self.post_attention_layernorm = self.build_post_attention_layernorm(args)
 
     @property
-    def input_features(self) -> int:
+    def in_dim(self) -> int:
         return self.hidden_size
 
     @property
-    def output_features(self) -> int:
+    def out_dim(self) -> int:
         return self.hidden_size
 
     @property

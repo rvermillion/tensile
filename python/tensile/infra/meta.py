@@ -10,7 +10,7 @@ from .util import class_qname, process_specs
 
 
 if TYPE_CHECKING:
-    import tensile.infrastructure
+    import tensile.infra
 
 
 class Updateable(Protocol):
@@ -328,13 +328,13 @@ class ObjectMeta(Meta):
 
     __slots__ = ('fields', 'own_fields', 'field_inits', 'slots')
 
-    cls: type['tensile.infrastructure.Object']
+    cls: type['tensile.infra.Object']
     fields: dict[str, Field]
     own_fields: dict[str, Field]
     field_inits: tuple[Initter, ...]
     slots: set[str]
 
-    def __init__(self, cls: type['tensile.infrastructure.Object'], **kwargs):
+    def __init__(self, cls: type['tensile.infra.Object'], **kwargs):
         Meta.__init__(self, cls, **kwargs)
 
         cls.meta = self
@@ -528,11 +528,14 @@ def for_qname(qname: str) -> Optional[Meta]:
     return Meta.for_qname(qname)
 
 
-def for_spec(spec: Any) -> Optional[Meta]:
+def for_spec(spec: Any, build: bool = False) -> Optional[Meta]:
     if isinstance(spec, type):
-        return for_class(spec)
+        return for_class(spec, build=build)
     elif isinstance(spec, str):
-        return for_qname(spec)
+        meta = for_qname(spec)
+        if meta is None and build:
+            raise MetaError(f'Cannot build meta for {spec}')
+        return meta
     return None
 
 

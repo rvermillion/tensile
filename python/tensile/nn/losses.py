@@ -2,7 +2,7 @@
 import math
 from typing import Literal
 
-from ..infrastructure.util import name_function
+from ..infra.util import name_function
 from .common import *
 
 

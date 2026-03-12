@@ -1,7 +1,7 @@
 #  Copyright (c) 2025. Richard Vermillion. All Rights Reserved.
 import re
 
-from ..infrastructure.types import (Any, ClassVar, Optional, Self, Sequence, TYPE_CHECKING)
+from ..infra.types import (Any, ClassVar, Optional, Self, Sequence, TYPE_CHECKING)
 
 
 if TYPE_CHECKING:

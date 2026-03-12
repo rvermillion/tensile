@@ -1,7 +1,7 @@
 #  Copyright (c) 2025. Richard Vermillion. All Rights Reserved.
 import math
 
-from ..infrastructure import meta
+from ..infra import meta
 from .common import Spec, Array, Optional, Protocol, ten
 
 

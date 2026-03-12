@@ -26,20 +26,8 @@ def swiglu(gate: Array, x: Array) -> Array:
     return silu(gate) * x
 
 
-@meta.provides(Activation, 'weighted')
-class WeightedActivation(Module):
-
-    __slots__ = ('weights', 'activations')
-
-    weights: Array
-    activations: list[Activation]
-
-    def __call__(self, x: Array) -> Array:
-        return ten.matmul(ten.softmax(self.weights), ten.stack([act(x) for act in self.activations], axis=0))
-
 
 __all__ = [
     'Activation',
-    'WeightedActivation'
 ]
 

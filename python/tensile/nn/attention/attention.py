@@ -107,14 +107,6 @@ class Attention(CompiledModule):
         self.encode_position = self.build_position_encoder(args)
         self.attend = self.build_attend(args)
 
-    @property
-    def input_features(self) -> int:
-        return self.in_dim
-
-    @property
-    def output_features(self) -> int:
-        return self.out_dim
-
     def build_attend(self, args: AttentionArgs) -> Attend:
         attend_args = args.attend.set_defaults(
             kind='default'

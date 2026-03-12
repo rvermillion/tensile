@@ -1,7 +1,7 @@
 #  Copyright (c) 2026. Richard Vermillion. All Rights Reserved.
 import math
 
-from ...infrastructure import RootObject
+from ...infra import RootObject
 from ..common import *
 from ..module import CompiledModule, ModuleArgs
 from .types import AttentionMasker, AttentionScorer, KVSlice

@@ -2,7 +2,7 @@
 
 # import patchlm.cache
 
-from ..infrastructure import meta, field
+from ..infra import meta, field
 from .common import *
 from .module import ForwardContext, ModuleArgs, Module, CompiledModule
 from ..nn.layers import DecoderLayer, Embedding, MLP, Normalization
@@ -175,11 +175,11 @@ class LanguageModel(CompiledModule):
         return call
 
     @property
-    def input_features(self) -> int:
+    def in_dim(self) -> int:
         return self.vocab_size
 
     @property
-    def output_features(self) -> int:
+    def out_dim(self) -> int:
         return self.hidden_size
 
     ForwardContext = LanguageModelContext

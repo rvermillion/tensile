@@ -1,7 +1,7 @@
 #  Copyright (c) 2026. Richard Vermillion. All Rights Reserved.
 
-from ...infrastructure.util import name_function
-from ...infrastructure.function import identity
+from ...infra.util import name_function
+from ...infra.function import identity
 from ..common import *
 from ..module import *
 
@@ -68,6 +68,14 @@ class Dropout(CompiledModule):
         default=0.5,
         readonly=True
     )]
+
+    @property
+    def in_dim(self) -> int:
+        return -1
+
+    @property
+    def out_dim(self) -> int:
+        return -1
 
     @property
     def notp(self) -> float:

@@ -1,6 +1,6 @@
 #  Copyright (c) 2025. Richard Vermillion. All Rights Reserved.
 
-from ...infrastructure.types import Callable
+from ...infra.types import Callable
 from .types import Array
 
 import mlx.core as mx

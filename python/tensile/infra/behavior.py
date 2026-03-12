@@ -1,7 +1,7 @@
 #  Copyright (c) 2025. Richard Vermillion. All Rights Reserved.
 from pathlib import Path
 
-import tensile.infrastructure as infra
+import tensile.infra as infra
 from . import log
 from .types import *
 from .util import class_qname, name_function
@@ -409,25 +409,33 @@ def coerce_conditional(coerce: Coercer[X, Y], condition: Callable[[Any], bool], 
     return name_function(coerce_if, f'coerce_conditional[{coerce}, condition={condition}]')
 
 
+def meta_coercer(meta: 'infra.Meta', this_arg: str = None) -> Coercer:
+
+    log.warn('Using meta {} coerce for automatic coercion', meta)
+
+    if this_arg is None:
+        # noinspection PyUnusedLocal
+        def coerce(this: Any, val: Any) -> X:
+            return meta.coerce(val)
+    else:
+        def coerce(this: Any, val: Any) -> X:
+            kwargs = {this_arg: this}
+            return meta.coerce(val, **kwargs)
+
+    return coerce
+
+
 def coerce_type(cls: Optional[type[X]], optional: bool = False, qname: str = None, auto: bool = None, generate: bool = False) -> Optional[Coercer[Any, X]]:
     if isinstance(cls, type):
         coerce = type_coercers.get(cls)
         if coerce is None:
+            if qname is None: qname = class_qname(cls)
             coerce = qname_coercers.get(qname)
         if coerce is None:
             if is_runtime_class(cls):
                 if getattr(cls, 'auto_coerce', False) if auto is None else auto:
-                    meta = infra.meta.for_class(cls, build=True)
-
-                    log.warn('Using meta {} coerce for automatic coercion of {}', meta, cls)
-
-                    # noinspection PyUnusedLocal
-                    def coerce(this: Any, val: Any) -> X:
-                        return meta.coerce(val)
-
-                    # coerce = getattr(cls, 'coerce', None)
-                    # if coerce is None:
-                    #     coerce = getattr(cls, '_coerce', None)
+                    meta = infra.meta.for_spec(cls or qname, build=True)
+                    coerce = meta_coercer(meta)
                 if coerce is None:
                     # noinspection PyUnusedLocal
                     def coerce(this: Any, val: Any) -> X:
@@ -439,6 +447,9 @@ def coerce_type(cls: Optional[type[X]], optional: bool = False, qname: str = Non
                 #         # noinspection PyCallingNonCallable
                 #         return coerce(val)
                 #     return auto_coerce
+            elif auto:
+                meta = infra.meta.for_spec(cls or qname, build=True)
+                coerce = meta_coercer(meta)
             else:
                 log.debug('Skipping non-runtime class:', cls)
     else:

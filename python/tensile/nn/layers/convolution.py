@@ -130,11 +130,11 @@ class Convolution(CompiledModule):
         return call
 
     @property
-    def input_features(self) -> int:
+    def in_dim(self) -> int:
         return self.in_channels
 
     @property
-    def output_features(self) -> int:
+    def out_dim(self) -> int:
         return self.out_channels
 
     def _extra_structure(self):

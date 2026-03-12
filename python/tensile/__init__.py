@@ -11,9 +11,9 @@
 # from .shims.mlx import core as ten
 # from .shims import torch as ten
 
-from . import infrastructure, util
+from . import infra, util
 
-infra = infrastructure
+infrastructure = infra
 
 from .shims import ten
 

@@ -2,7 +2,7 @@
 from collections.abc import Callable
 from typing import Iterable, Optional
 from tensile import ten, Array, AxisSelector, Selector
-from ..infrastructure import RootObject
+from ..infra import RootObject
 
 full_slice = slice(None)
 

@@ -2,12 +2,12 @@
 
 import re
 
-from ..infrastructure import Object, Representable, log, meta
-from ..infrastructure.field import method_builders
-from ..infrastructure.meta import Meta, ObjectMeta, Field, Scope
-from ..infrastructure.abc import ABCClass
-from ..infrastructure.util import name_function
-from ..infrastructure.types import (
+from ..infra import Object, Representable, log, meta
+from ..infra.field import method_builders
+from ..infra.meta import Meta, ObjectMeta, Field, Scope
+from ..infra.abc import ABCClass
+from ..infra.util import name_function
+from ..infra.types import (
     Annotated, Any, Callable, ClassVar, Iterable, Iterator, Optional, Sequence, TypeVar, Self, Union,
     Getter, Setter, Spec, missing
 )

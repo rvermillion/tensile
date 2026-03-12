@@ -36,11 +36,11 @@ class Normalization(CompiledModule):
         self.affine = args.affine
 
     @property
-    def input_features(self) -> int:
+    def in_dim(self) -> int:
         return self.dims
 
     @property
-    def output_features(self) -> int:
+    def out_dim(self) -> int:
         return self.dims
 
     Args = NormalizationArgs
@@ -201,6 +201,7 @@ class InstanceNorm(AffineNorm):
         super().init_from_args(args, bias=True)
 
     def build_call(self, train: bool = False, **options) -> Callable:
+        eps = self.eps
         if self.weight is None:
             def call(x: Array) -> Array:
                 reduction_axes = tuple(range(1, x.ndim - 1))
@@ -208,7 +209,7 @@ class InstanceNorm(AffineNorm):
                 mean = ten.mean(x, axis=reduction_axes, keepdims=True)
                 var = ten.var(x, axis=reduction_axes, keepdims=True)
                 # Normalize
-                x = (x - mean) * ten.rsqrt(var + self.eps)
+                x = (x - mean) * ten.rsqrt(var + eps)
                 # Scale and shift if necessary
                 return x
         else:
@@ -218,7 +219,7 @@ class InstanceNorm(AffineNorm):
                 mean = ten.mean(x, axis=reduction_axes, keepdims=True)
                 var = ten.var(x, axis=reduction_axes, keepdims=True)
                 # Normalize
-                x = (x - mean) * ten.rsqrt(var + self.eps)
+                x = (x - mean) * ten.rsqrt(var + eps)
                 # Scale and shift if necessary
                 return self.weight * x + self.bias
         return call

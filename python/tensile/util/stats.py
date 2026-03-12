@@ -2,7 +2,7 @@
 
 from typing import Any, Callable, Iterable
 
-from ..infrastructure import function
+from ..infra import function
 from .. import ten, Array
 
 Stat = Callable[[ten.Array], ten.Scalar|ten.Array]

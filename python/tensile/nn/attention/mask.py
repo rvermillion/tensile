@@ -1,6 +1,6 @@
 #  Copyright (c) 2026. Richard Vermillion. All Rights Reserved.
 
-from ...infrastructure import RootObject
+from ...infra import RootObject
 from ..common import *
 from .types import AttentionMasker, MaskBuilder
 

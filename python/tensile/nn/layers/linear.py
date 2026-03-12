@@ -75,25 +75,17 @@ class Linear(CompiledModule):
         return call
 
     @property
-    def input_dims(self) -> int:
+    def in_dim(self) -> int:
         return 0 if (w := self.weight) is None else w.shape[1]
 
     @property
-    def output_dims(self) -> int:
+    def out_dim(self) -> int:
         return 0 if (w := self.weight) is None else w.shape[0]
-
-    @property
-    def input_features(self) -> int:
-        return self.input_dims
-
-    @property
-    def output_features(self) -> int:
-        return self.output_dims
 
     def _extra_structure(self):
         return (
-            f"input_dims={self.input_dims}, "
-            f"output_dims={self.output_dims}, "
+            f"input_dims={self.in_dim}, "
+            f"output_dims={self.out_dim}, "
             f"bias={self.bias is not None}"
         )
 
@@ -195,11 +187,11 @@ class QuantizedLinear(CompiledModule):
         return self.weight.shape[0]
 
     @property
-    def input_features(self) -> int:
+    def in_dim(self) -> int:
         return self.input_dims
 
     @property
-    def output_features(self) -> int:
+    def out_dim(self) -> int:
         return self.output_dims
 
     def _extra_repr(self):

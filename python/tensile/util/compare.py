@@ -5,10 +5,10 @@ import re
 from pathlib import Path
 from typing import Annotated, Any, Self
 
-from ..infrastructure import Object, field
+from ..infra import Object, field
 from .. import ten
 from .stats import get_stats
-from ..infrastructure import PredicateFunction, predicates
+from ..infra import PredicateFunction, predicates
 
 
 CompareResult = str|dict[str, 'CompareResult']|None

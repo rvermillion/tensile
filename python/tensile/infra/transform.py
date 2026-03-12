@@ -3,7 +3,7 @@ from collections.abc import Sized
 from types import EllipsisType, NoneType
 from typing import Any, Generic, TYPE_CHECKING, TypeVar, final
 
-import tensile.infrastructure as infra
+import tensile.infra as infra
 
 from .function import identity, none, compose_all
 from .meta import meta_configure_coerce

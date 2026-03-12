@@ -142,6 +142,14 @@ class Pool(CompiledModule):
         self.stride = stride
         self.padding = padding
 
+    @property
+    def in_dim(self) -> int:
+        return -1
+
+    @property
+    def out_dim(self) -> int:
+        return -1
+
     def build_call(self, train: bool = False, **options) -> Callable:
         if self.pool == avg_pooling:
             pool = ten.mean

@@ -5,7 +5,7 @@ import re
 import operator as op
 from builtins import all as ball, any as bany
 
-import tensile.infrastructure as infra
+import tensile.infra as infra
 
 from .types import Comparison, PredicateFunction, PredicateLike, TransformFunction, TransformLike, TYPE_CHECKING, missing
 from .meta import meta_coerce_class, meta_configure_coerce

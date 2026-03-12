@@ -19,11 +19,11 @@ class PositionEncoder(CompiledModule):
         raise NotImplementedError()
 
     @property
-    def input_features(self) -> int:
+    def in_dim(self) -> int:
         return -1
 
     @property
-    def output_features(self) -> int:
+    def out_dim(self) -> int:
         return -1
 
     class Args(ModuleArgs):

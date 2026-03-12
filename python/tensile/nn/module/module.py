@@ -4,9 +4,9 @@ import textwrap
 from pathlib import Path
 from typing import final
 
-from ...infrastructure.types import Coercer, Setter, is_protocol
+from ...infra.types import Coercer, Setter, is_protocol
 from ..common import *
-from ...infrastructure.util import join_str, name_function, noop, tie_call
+from ...infra.util import join_str, name_function, noop, tie_call
 
 from .args import ModuleArgs
 from .context import ForwardContext
@@ -19,20 +19,15 @@ optional = object()
 M = TypeVar('M', bound='Module')
 
 
-ModuleFilter = Callable[['Module', str, Any], bool]
-
-EntryPredicate = Predicate[TreeEntry]
-
-
 @predicates.function
 def is_module(value: Any) -> bool:
     return isinstance(value, Module)
 
-is_module_entry: EntryPredicate = tree.value_predicate(is_module)
+is_module_entry: tree.TreePredicate = tree.value_predicate(is_module)
 
 is_parameter: Predicate = tree.is_array
 
-is_parameter_entry: tree.TreeFilter = tree.is_array_entry
+is_parameter_entry: tree.TreePredicate = tree.is_array_entry
 
 @predicates.function
 def is_container(value: Any) -> bool:
@@ -235,23 +230,23 @@ class Module(Object, tree.TreeNode[ModuleTreeValue]):
         pass
 
     @property
-    def input_features(self) -> int:
+    def in_dim(self) -> int:
         return 0
 
     @property
-    def output_features(self) -> int:
+    def out_dim(self) -> int:
         return 0
 
     @property
     def input_feature_shape(self) -> Shape:
-        features = self.input_features
+        features = self.in_dim
         if features > 0:
             return features,
         return ()
 
     @property
     def output_feature_shape(self) -> Shape:
-        features = self.output_features
+        features = self.out_dim
         if features > 0:
             return features,
         return ()
@@ -628,7 +623,7 @@ class Module(Object, tree.TreeNode[ModuleTreeValue]):
     #         pass
 
     def _repr_args(self, **options) -> str:
-        in_dim, out_dim = self.input_features, self.output_features
+        in_dim, out_dim = self.in_dim, self.out_dim
         extra = self._extra_structure()
         if in_dim == 0 or out_dim == 0:
             dims = ''

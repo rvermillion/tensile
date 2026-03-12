@@ -20,6 +20,12 @@ class MLPArgs(ModuleArgs):
     gate_proj: Annotated[LinearArgs, field(
         doc='The arguments for the up projection',
     )]
+    inner_proj: Annotated[LinearArgs, field(
+        doc='The arguments for the projection in any inner layers',
+    )]
+    layers: Annotated[int, field(
+        default=1,
+    )]
     bias: Annotated[bool, field(
         doc='Whether the MLP should have a bias',
         inherit='mlp_bias',
@@ -33,7 +39,7 @@ class MLPArgs(ModuleArgs):
 @provides(Module, 'mlp')
 class MLP(CompiledModule):
 
-    __slots__ = ('in_dim', 'out_dim', 'hidden_dim', 'activation', 'gate_proj', 'up_proj', 'down_proj', 'bias')
+    __slots__ = ('in_dim', 'out_dim', 'hidden_dim', 'activation', 'up_proj', 'down_proj', 'bias')
 
     args: Annotated[MLPArgs, field(ignore=True)]
     in_dim: Annotated[int, field(
@@ -54,9 +60,6 @@ class MLP(CompiledModule):
     up_proj: Annotated[Module, field(
         doc='The up projection module of the MLP',
     )]
-    gate_proj: Annotated[Module, field(
-        doc='The gate projection module of the MLP',
-    )]
     down_proj: Annotated[Module, field(
         doc='The down projection module of the MLP',
     )]
@@ -70,32 +73,20 @@ class MLP(CompiledModule):
         self.bias = args.bias
 
         self.up_proj = self.build_up_proj(bias=self.bias)
-        self.gate_proj = self.build_gate_proj(bias=self.bias)
         self.down_proj = self.build_down_proj(bias=self.bias)
         self.activation = self.build_activation()
-
-    @property
-    def input_features(self) -> int:
-        return self.in_dim
-
-    @property
-    def output_features(self) -> int:
-        return self.out_dim
 
     def build_call(self, train: bool = False, **options) -> Callable:
         up_proj = self.up_proj
         down_proj = self.down_proj
-        gate_proj = self.gate_proj
         activation = self.activation
 
         if down_proj is None:
             def call(x: Array) -> Array:
-                # ten.eval(x)
-                return activation(gate_proj(x)) * up_proj(x)
+                return activation(up_proj(x))
         else:
             def call(x: Array) -> Array:
-                # ten.eval(x)
-                return down_proj(activation(gate_proj(x)) * up_proj(x))
+                return down_proj(activation(up_proj(x)))
 
         return call
 
@@ -118,18 +109,6 @@ class MLP(CompiledModule):
         )
         return self.build_proj_from_args(args)
 
-    def build_gate_proj(self, bias: bool = False, name: str = 'gate_proj') -> Module:
-        """
-        Build the gate projection module of the MLP.
-        """
-        args = self.args.gate_proj.set_defaults(
-            input_dims=self.in_dim,
-            output_dims=self.hidden_dim,
-            bias=bias,
-        )
-        return self.build_proj_from_args(args)
-        # return self.build_proj(self.in_dim, self.hidden_dim, bias=bias, name=name)
-
     def build_down_proj(self, bias: bool = False, name: str = 'down_proj') -> Module:
         """
         Build the down projection module of the MLP.
@@ -150,75 +129,58 @@ class MLP(CompiledModule):
     Args = MLPArgs
 
 
-class AllRouter(Module):
+@provides(Module, 'mlp.glu')
+@provides(MLP, 'glu')
+class GatedLinear(MLP):
 
-    k: Optional[int] = None
+    __slots__ = ('gate_proj',)
 
-    def __call__(self, x: Array, **kwargs) -> tuple[Array, Array]:
-        k = x.shape[-1]
-        if self.k is not None:
-            k = min(k, self.k)
-        return ten.ones((1, k), dtype=ten.float32)/k, ten.arange(k)
+    gate_proj: Annotated[Module, field(
+        doc='The gate projection module of the MLP',
+    )]
 
+    def init_from_args(self, args: MLPArgs):
+        super().init_from_args(args)
 
-class MixtureOfExperts(Module):
+        self.gate_proj = self.build_gate_proj(bias=self.bias)
 
-    __slots__ = ('router', 'experts')
+    def build_call(self, train: bool = False, **options) -> Callable:
+        up_proj = self.up_proj
+        down_proj = self.down_proj
+        gate_proj = self.gate_proj
+        activation = self.activation
 
-    kind = 'moe'
+        if down_proj is None:
+            def call(x: Array) -> Array:
+                # ten.eval(x)
+                return activation(gate_proj(x)) * up_proj(x)
+        else:
+            def call(x: Array) -> Array:
+                # ten.eval(x)
+                return down_proj(activation(gate_proj(x)) * up_proj(x))
 
-    router: Module
-    experts: list[Module]
+        return call
 
-    def __call__(self, x: Array, **kwargs) -> Array:
-        experts = self.experts
-        weights, indices = self.router(x, **kwargs)
-        return ten.matmul(weights, ten.stack([experts[i](x, **kwargs) for i in indices], axis=0))
+    default_activation_spec: ClassVar[str] = 'silu'
 
+    def build_gate_proj(self, bias: bool = False, name: str = 'gate_proj') -> Module:
+        """
+        Build the gate projection module of the MLP.
+        """
+        args = self.args.gate_proj.set_defaults(
+            input_dims=self.in_dim,
+            output_dims=self.hidden_dim,
+            bias=bias,
+        )
+        return self.build_proj_from_args(args)
+        # return self.build_proj(self.in_dim, self.hidden_dim, bias=bias, name=name)
 
-class WeightedModule(Module):
+    def _extra_structure(self) -> str:
+        return f'in_dim={self.in_dim}, out_dim={self.out_dim}, hidden_dim={self.hidden_dim}, '
 
-    __slots__ = ('weights', 'modules')
-
-    weights: Array
-    modules: list[Module]
-
-    def _coerce_modules(self, spec: Any) -> list[Module]:
-        if spec is None: return []
-        if isinstance(spec, list):
-            return spec
-        if isinstance(spec, Module):
-            return [spec]
-        if isinstance(spec, Iterable):
-            return list(spec)
-        raise TypeError(f'expected list or Module, got {type(spec)}')
-
-    def postinit(self, spec: Spec):
-        if self.weights.ndim != 1:
-            raise ValueError('weights must be a 1D array')
-        if len(self.modules) != self.weights.shape[0]:
-            raise ValueError('modules must have the same length as weights')
-
-    def __call__(self, x: Array, **kwargs) -> Array:
-        return ten.matmul(ten.softmax(self.weights), ten.stack([module(x, **kwargs) for module in self.modules], axis=0))
-
-
-# class TrainAlternateModule(DelegatingModule):
-#
-#     __slots__ = ('alternate',)
-#
-#     alternate: Module
-#
-#     def __call__(self, x: Array, *args, **kwargs) -> Array:
-#         y = self.delegate(x, *args, **kwargs)
-#
-#         y_alt = self.alternate(x, *args, **kwargs)
-#
-#         return y
 
 
 __all__ = [
     'MLP',
     'MLPArgs',
-    'WeightedModule'
 ]

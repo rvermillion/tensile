@@ -51,16 +51,12 @@ class Embedding(CompiledModule):
         return 0 if (w := self.weight) is None else w.shape[0]
 
     @property
-    def output_dim(self) -> int:
+    def out_dim(self) -> int:
         return 0 if (w := self.weight) is None else w.shape[1]
 
     @property
-    def input_features(self) -> int:
+    def in_dim(self) -> int:
         return self.num_embeddings
-
-    @property
-    def output_features(self) -> int:
-        return self.output_dim
 
     def build_call(self, train: bool = False, **options):
         def call(x):
@@ -171,11 +167,11 @@ class QuantizedEmbedding(CompiledModule):
         self.freeze()
 
     @property
-    def input_features(self) -> int:
+    def in_dim(self) -> int:
         return self.num_embeddings
 
     @property
-    def output_features(self) -> int:
+    def out_dim(self) -> int:
         return self.output_dims
 
     def build_call(self, train: bool = False, **options) -> Callable:

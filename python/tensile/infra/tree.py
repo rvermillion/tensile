@@ -6,9 +6,9 @@ from typing import Any, Generic, Optional, Self, TypeVar, Union
 
 from ..shims import ten
 from .function import identity
-from .predicate import Predicate, Predicates as predicates
-from .transform import Transform, Transforms as transforms
-from .types import PredicateLike
+from .predicate import Predicate, Predicates
+from .transform import Transform, Transforms
+from .types import PredicateFunction, PredicateLike
 
 Array = ten.Array
 
@@ -34,7 +34,8 @@ class TreeNode(Generic[T]):
 TreeStep = Union[str, int]
 
 
-TreeFilter = Predicate['TreeEntry']
+TreePredicateFunction = PredicateFunction['TreeEntry']
+TreePredicate = Predicate['TreeEntry']
 TreeAction = Callable[['TreeEntry'], Any]
 
 
@@ -44,16 +45,16 @@ class Traverser:
     __slots__ = ('parent_first', 'include', 'descend')
 
     parent_first: bool
-    include: TreeFilter
-    descend: TreeFilter
+    include: TreePredicateFunction
+    descend: TreePredicateFunction
 
-    def __init__(self, *, is_leaf: TreeFilter = None, include: TreeFilter = None,
-                 descend: TreeFilter = None, include_intermediate: bool = False, parent_first: bool = True,
+    def __init__(self, *, is_leaf: TreePredicateFunction = None, include: TreePredicateFunction = None,
+                 descend: TreePredicateFunction = None, include_intermediate: bool = False, parent_first: bool = True,
                  ) -> None:
         if include is None:
             if is_leaf is None:
                 if include_intermediate:
-                    self.include = predicates.always
+                    self.include = Predicates.always
                 else:
                     self.include = is_not_container
             else:
@@ -62,9 +63,9 @@ class Traverser:
             self.include = include
         if descend is None:
             if is_leaf is not None:
-                self.descend = predicates.invert(is_leaf)
+                self.descend = Predicates.invert(is_leaf)
             else:
-                self.descend = predicates.always
+                self.descend = Predicates.always
         else:
             self.descend = descend
         self.parent_first = parent_first
@@ -275,8 +276,8 @@ class TreeEntry(tuple[str, T]):
     def entries(self,
                 is_leaf: Optional[Callable] = None,
                 include_intermediate: bool = False,
-                include: Optional[TreeFilter] = None,
-                descend: Optional[TreeFilter] = None,
+                include: Optional[TreePredicateFunction] = None,
+                descend: Optional[TreePredicateFunction] = None,
                 parent_first: bool = True,
                 traverser: Traverser = None,
                 ) -> Iterable[Self]:
@@ -305,103 +306,103 @@ class TreeEntry(tuple[str, T]):
 
 
 
-path_transform: Transform[TreeEntry, str] = transforms.get_attr('path')
-value_transform: Transform[TreeEntry, Any] = transforms.get_attr('value')
-parent_transform: Transform[TreeEntry, Optional[TreeEntry]] = transforms.get_attr('parent')
-step_transform: Transform[TreeEntry, str] = transforms.get_attr('step')
+path_transform: Transform[TreeEntry, str] = Transforms.get_attr('path')
+value_transform: Transform[TreeEntry, Any] = Transforms.get_attr('value')
+parent_transform: Transform[TreeEntry, Optional[TreeEntry]] = Transforms.get_attr('parent')
+step_transform: Transform[TreeEntry, str] = Transforms.get_attr('step')
 
 
-def path_predicate(path_pred: PredicateLike[str]) -> TreeFilter:
-    return predicates.transform(path_transform, path_pred)
+def path_predicate(path_pred: PredicateLike[str]) -> TreePredicate:
+    return Predicates.transform(path_transform, path_pred)
 
 
-def value_predicate(value_pred: PredicateLike) -> TreeFilter:
-    return predicates.transform(value_transform, value_pred)
+def value_predicate(value_pred: PredicateLike) -> TreePredicate:
+    return Predicates.transform(value_transform, value_pred)
 
 
-def step_predicate(step_pred: PredicateLike[str]) -> TreeFilter:
-    return predicates.transform(step_transform, step_pred)
+def step_predicate(step_pred: PredicateLike[str]) -> TreePredicate:
+    return Predicates.transform(step_transform, step_pred)
 
 
-def parent_predicate(parent_pred: PredicateLike['TreeEntry']) -> TreeFilter:
-    return predicates.transform(parent_transform, parent_pred)
+def parent_predicate(parent_pred: PredicateLike['TreeEntry']) -> TreePredicate:
+    return Predicates.transform(parent_transform, parent_pred)
 
 
-predicates.register('tree.step', step_predicate)
-predicates.register('tree.path', path_predicate)
-predicates.register('tree.value', value_predicate)
-predicates.register('tree.parent', parent_predicate)
+Predicates.register('tree.step', step_predicate)
+Predicates.register('tree.path', path_predicate)
+Predicates.register('tree.value', value_predicate)
+Predicates.register('tree.parent', parent_predicate)
 
 
-def value_is_instance(*cls: type) -> TreeFilter:
-    return value_predicate(predicates.is_instance(*cls))
+def value_is_instance(*cls: type) -> TreePredicate:
+    return value_predicate(Predicates.is_instance(*cls))
 
 
-is_array: Predicate = predicates.function(ten.is_array)
-is_dtype: Predicate = predicates.function(ten.is_dtype)
+is_array: Predicate = Predicates.function(ten.is_array)
+is_dtype: Predicate = Predicates.function(ten.is_dtype)
 
-is_array_entry: TreeFilter = value_predicate(is_array)
-
-
-is_container: TreeFilter = value_is_instance(list, dict)
-
-is_not_container: TreeFilter = ~is_container
-
-is_node: TreeFilter = value_is_instance(list, dict, TreeNode)
+is_array_entry: TreePredicate = value_predicate(is_array)
 
 
-def path_equals(path: str) -> TreeFilter:
-    return path_predicate(predicates.eq(path))
+is_container: TreePredicate = value_is_instance(list, dict)
+
+is_not_container: TreePredicate = ~is_container
+
+is_node: TreePredicate = value_is_instance(list, dict, TreeNode)
 
 
-def path_startswith(prefix: str) -> TreeFilter:
-    return path_predicate(predicates.starts_with(prefix))
+def path_equals(path: str) -> TreePredicateFunction:
+    return path_predicate(Predicates.eq(path))
 
 
-def path_contains(part: str) -> TreeFilter:
-    return path_predicate(predicates.contains(part))
+def path_startswith(prefix: str) -> TreePredicateFunction:
+    return path_predicate(Predicates.starts_with(prefix))
 
 
-def path_endswith(suffix: str) -> TreeFilter:
-    return path_predicate(predicates.ends_with(suffix))
+def path_contains(part: str) -> TreePredicateFunction:
+    return path_predicate(Predicates.contains(part))
 
 
-def path_matches(pattern: str) -> TreeFilter:
-    return path_predicate(predicates.matches(pattern))
+def path_endswith(suffix: str) -> TreePredicateFunction:
+    return path_predicate(Predicates.ends_with(suffix))
 
 
-def step_equals(path: str) -> TreeFilter:
-    return step_predicate(predicates.eq(path))
+def path_matches(pattern: str) -> TreePredicateFunction:
+    return path_predicate(Predicates.matches(pattern))
 
 
-def step_startswith(prefix: str) -> TreeFilter:
-    return step_predicate(predicates.starts_with(prefix))
+def step_equals(path: str) -> TreePredicateFunction:
+    return step_predicate(Predicates.eq(path))
 
 
-def step_contains(part: str) -> TreeFilter:
-    return step_predicate(predicates.contains(part))
+def step_startswith(prefix: str) -> TreePredicateFunction:
+    return step_predicate(Predicates.starts_with(prefix))
 
 
-def step_endswith(suffix: str) -> TreeFilter:
-    return step_predicate(predicates.ends_with(suffix))
+def step_contains(part: str) -> TreePredicateFunction:
+    return step_predicate(Predicates.contains(part))
 
 
-def step_matches(pattern: str) -> TreeFilter:
-    return step_predicate(predicates.matches(pattern))
+def step_endswith(suffix: str) -> TreePredicateFunction:
+    return step_predicate(Predicates.ends_with(suffix))
+
+
+def step_matches(pattern: str) -> TreePredicateFunction:
+    return step_predicate(Predicates.matches(pattern))
 
 
 
 
-not_leaf_entry: TreeFilter = is_node
+not_leaf_entry: TreePredicate = is_node
 
-is_leaf_entry: TreeFilter = ~not_leaf_entry
+is_leaf_entry: TreePredicate = ~not_leaf_entry
 
-is_sequence_entry: TreeFilter = value_is_instance(list, tuple)
+is_sequence_entry: TreePredicate = value_is_instance(list, tuple)
 
-is_mapping_entry: TreeFilter = value_is_instance(dict, TreeNode)
+is_mapping_entry: TreePredicate = value_is_instance(dict, TreeNode)
 
-has_children: TreeFilter = value_predicate(
-    predicates.is_instance(list, tuple, dict, TreeNode) & predicates.is_true
+has_children: TreePredicate = value_predicate(
+    Predicates.is_instance(list, tuple, dict, TreeNode) & Predicates.is_true
 )
 
 
@@ -580,8 +581,8 @@ def traverse(
     prefix: str = "",
     is_leaf: Optional[Callable] = None,
     include_intermediate: bool = False,
-    include: Optional[TreeFilter] = None,
-    descend: Optional[TreeFilter] = None,
+    include: Optional[TreePredicateFunction] = None,
+    descend: Optional[TreePredicateFunction] = None,
     parent_first: bool = True,
     force_descend: bool = False,
     traverser: Traverser = None,
@@ -648,10 +649,10 @@ def filter(
     tree: Tree[T],
     prefix: str = "",
     map_fn: Optional[Callable[[Any], Any]] = None,
-    is_leaf: Optional[TreeFilter] = None,
+    is_leaf: Optional[TreePredicateFunction] = None,
     include_intermediate: bool = False,
-    include: Optional[TreeFilter] = None,
-    descend: Optional[TreeFilter] = None,
+    include: Optional[TreePredicateFunction] = None,
+    descend: Optional[TreePredicateFunction] = None,
     parent_first: bool = True,
     force_descend: bool = False,
     traverser: Traverser = None,
@@ -668,9 +669,9 @@ def apply(
     tree: Tree,
     apply_fn: TreeAction,
     prefix: str = "",
-    is_leaf: TreeFilter = None,
-    include: TreeFilter = None,
-    descend: TreeFilter = None,
+    is_leaf: TreePredicateFunction = None,
+    include: TreePredicateFunction = None,
+    descend: TreePredicateFunction = None,
     include_intermediate: bool = False,
     parent_first: bool = True,
     traverser: Traverser = None,
@@ -702,9 +703,9 @@ def apply(
 def flatten(
     tree: Tree,
     prefix: str = "",
-    is_leaf: TreeFilter = None,
-    include: TreeFilter = None,
-    descend: TreeFilter = None,
+    is_leaf: TreePredicateFunction = None,
+    include: TreePredicateFunction = None,
+    descend: TreePredicateFunction = None,
     include_intermediate: bool = False,
     parent_first: bool = True,
     force_descend: bool = False,
@@ -719,9 +720,9 @@ def flatten(
 def flatdict(
     tree: Tree,
     prefix: str = "",
-    is_leaf: TreeFilter = None,
-    include: TreeFilter = None,
-    descend: TreeFilter = None,
+    is_leaf: TreePredicateFunction = None,
+    include: TreePredicateFunction = None,
+    descend: TreePredicateFunction = None,
     include_intermediate: bool = False,
     parent_first: bool = True,
     traverser: Traverser = None,
@@ -782,9 +783,9 @@ def unflatten(tree: list[tuple[str, T]]) -> Tree[T]:
 
 def reduce(fn, tree, *,
            initializer=None,
-           is_leaf: TreeFilter = None,
-           include: TreeFilter = None,
-           descend: TreeFilter = None,
+           is_leaf: TreePredicateFunction = None,
+           include: TreePredicateFunction = None,
+           descend: TreePredicateFunction = None,
            include_intermediate: bool = False,
            parent_first: bool = True,
            traverser: Traverser = None):

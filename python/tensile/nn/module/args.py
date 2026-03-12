@@ -1,7 +1,7 @@
 #  Copyright (c) 2026. Richard Vermillion. All Rights Reserved.
 
-from ...infrastructure import field
-from ...infrastructure.types import Annotated, Any, Optional, Self, TypeVar, Union
+from ...infra import field
+from ...infra.types import Annotated, Any, Optional, Self, TypeVar, Union
 from ...config import Config
 
 
