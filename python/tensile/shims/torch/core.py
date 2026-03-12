@@ -82,7 +82,7 @@ def as_type(a: Any, dtype: DType) -> Array:
     return tensor(a, dtype=dtype)
 
 from torch import (
-    tensor, dtype,
+    tensor,
     zeros, zeros_like, ones, ones_like, full, full_like, empty, empty_like,
     arange, concatenate, reshape,
     abs, square, sqrt, exp, log, expm1, sin, cos, tan, sigmoid,
@@ -130,6 +130,14 @@ def array(data, *args, **kwargs) -> Array:
     if x.device.type != 'mps':
         print('Non-MPS device detected. Consider using MPS for better performance.')
     return x
+
+def dtype(dt: str|DType) -> DType:
+    if isinstance(dt, str):
+        dt = dt.lower()
+        dt = getattr(torch, dt)
+    if isinstance(dt, DType):
+        return dt
+    raise TypeError(f"Invalid dtype: {dt}")
 
 # noinspection PyShadowingNames
 def parameter(x: Array) -> Array:
