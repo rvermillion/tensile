@@ -1,5 +1,5 @@
 
-from tensile.infrastructure import predicates
+from tensile.infra import predicates
 
 gt_40 = predicates.gt(40)
 eq_23 = predicates.eq(23)
