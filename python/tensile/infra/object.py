@@ -187,6 +187,8 @@ class Object(UpdateableObject, metaclass=ObjectClass):
             return factory(spec, **kwargs)
         raise ValueError(f'Cannot coerce {spec} to kind [{kind}] of {cls}')
 
+    _single_key_kind: ClassVar[Annotated[bool, field(ignore=True)]] = False
+
     @classmethod
     def _coerce_from_sequence(cls, spec: Sequence, /, **kwargs):
         if factory := cls.meta.get_factory(from_type='sequence'):
