@@ -2,34 +2,18 @@
 
 # import patchlm.cache
 
-from ..infra import meta, field
 from .common import *
-from .module import ForwardContext, ModuleArgs, Module, CompiledModule
-from ..nn.layers import DecoderLayer, Embedding, MLP, Normalization
+from .module import ForwardContext, Module, CompiledModule
+from ..nn.layers import DecoderLayer, Embedding, Normalization
 from ..nn.attention.mask import AttentionMasker, create_causal_mask, make_additive_masker
+from .cache import ModelCache, KVCache
 from .quantization import QuantizableModuleArgs
 
 
-# @dataclass
 class LanguageModelArgs(QuantizableModuleArgs):
     model_type: Annotated[str, 'Model type identifier']
     hidden_size: int
-    # intermediate_size: int
-    # num_hidden_layers: int
     vocab_size: int
-    # rms_norm_eps: float
-    # num_attention_heads: int
-    # head_dim: Optional[int] = None
-    # max_position_embeddings: Optional[int] = None
-    # num_key_value_heads: Optional[int] = None
-    # attention_bias: bool = False
-    # attention_kind: str = 'standard'
-    # mlp: MLP.Args = None
-    # mlp_bias: bool = False
-    # rope_theta: float = 10000
-    # rope_traditional: bool = False
-    # rope_scaling: Optional[dict[str, Union[float, str]]] = None
-    # tie_word_embeddings: bool = True
     tokenizer: Optional[str] = None
 
     embedding: Embedding.Args = None
@@ -37,11 +21,6 @@ class LanguageModelArgs(QuantizableModuleArgs):
     norm: Normalization.Args = None
 
     _config_default_step = 'model'
-
-    # def __post_init__(self):
-    #     super().__post_init__()
-    #     if self.num_key_value_heads is None:
-    #         self.num_key_value_heads = self.num_attention_heads
 
 
 class LanguageModelContext(ForwardContext):
@@ -51,14 +30,11 @@ class LanguageModelContext(ForwardContext):
     mask: Annotated[Optional[Array], field(
         doc='The mask to apply to the input'
     )]
-    cache: Annotated[Optional['patchlm.cache.ModelCache'], field(
+    cache: Annotated[Optional[ModelCache], field(
         doc='The cache to use for this forward pass'
     )]
-    layer_cache: Annotated[Optional['patchlm.cache.KVCache'], field(
+    layer_cache: Annotated[Optional[KVCache], field(
         doc='The kv cache for the current layer to use for this forward pass'
-    )]
-    call: Annotated[Optional['patchlm.cache.ModelCall'], field(
-        doc='The current call to use for this forward pass'
     )]
 
     def get_mask(self, n: int, dtype: DType = ten.float32) -> Optional[Array]:
@@ -132,9 +108,9 @@ class LanguageModel(CompiledModule):
         )
         return Normalization.from_args(norm_args)
 
-    def build_cache(self) -> Optional['patchlm.cache.ModelCache']:
+    def build_cache(self) -> Optional[ModelCache]:
         if self.training: return None
-        return meta.coerce(patchlm.cache.ModelCache, model=self)
+        return meta.coerce(ModelCache, model=self)
 
     def build_call(self, train: bool = False, **options) -> Callable:
 
@@ -143,17 +119,14 @@ class LanguageModel(CompiledModule):
             h = self.embed_tokens(inputs)
 
             if ctx := LanguageModelContext.get_current():
-                mask = ctx.mask
                 cache = ctx.cache
 
                 if cache is None:
                     cache = ctx.cache = self.build_cache()
 
-                model_call = None if cache is None else cache.create_call(inputs, h, mask)
             else:
                 ctx = LanguageModelContext(model=self)
                 cache = None
-                model_call = None
 
             with ctx.push():
 
@@ -165,8 +138,6 @@ class LanguageModel(CompiledModule):
                     for layer, cache_layer in zip(self.layers, cache.layers):
                         ctx.layer_cache = cache_layer
                         h = layer(h)
-
-                    cache.finish_call(model_call)
 
                 out = self.norm(h)
 

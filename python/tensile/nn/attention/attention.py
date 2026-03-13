@@ -159,7 +159,6 @@ class Attention(CompiledModule):
 
 
 meta.for_class(Attention).configure_registry(
-    modules='patchlm.models',
     append_kind=True,
     default_kind='standard'
 )
@@ -280,14 +279,7 @@ class StandardAttention(Attention):
                     masker=masker,
                     **extra,
                 )
-                # output = standard_attention(
-                #     queries, keys, values,
-                #     mask=mask,
-                #     score_attention=score_attention,
-                # )
 
-            # Output will have shape (B, H, L, D_v)
-            # Reshape it to (B, L, D)
             if output.ndim == 5:
                 output = output.reshape(B, H, L, -1)
             ten.debug_eval(output)

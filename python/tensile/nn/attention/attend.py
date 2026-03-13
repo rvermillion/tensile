@@ -5,8 +5,8 @@ import math
 from .util import shift_slice
 from ..common import *
 from ..module import CompiledModule, ModuleArgs
-from .score import AttentionScores, AttentionScoresFactory
-from .types import AttendFunction, AttentionMasker, AttentionScorer, KV, KVSlice, QKV
+from .score import AttentionScores
+from .types import AttendFunction, AttentionMasker, AttentionScorer, KVSlice, QKV
 
 
 class Attend(CompiledModule):
@@ -243,8 +243,14 @@ class AttendWithSink(DefaultAttend):
         initial_beta = args.get('initial_beta', default=default_initial_beta)
         dtype = ten.dtype(args.get('dtype', default=ten.float32))
 
-        null_values = ten.zeros((1, n_kv_heads, 1, 1, hidden_size // n_q_heads), dtype=dtype)
-        betas = ten.full((1, n_kv_heads, 1, 1, 1), initial_beta, dtype=dtype)
+        if args.get('nilpotent', False):
+            null_values = ten.zeros((1, n_kv_heads, 1, 1, hidden_size // n_q_heads), dtype=dtype)
+            betas = ten.full((1, n_kv_heads, 1, 1, 1), initial_beta, dtype=dtype)
+        else:
+            size = n_kv_heads * (hidden_size//n_q_heads)
+            scale = size ** 0.5
+            null_values = ten.as_type(ten.random.normal(scale=scale, shape=(1, n_kv_heads, 1, 1, hidden_size // n_q_heads)), dtype)
+            betas = ten.full((1, n_kv_heads, 1, 1, 1), 0., dtype=dtype)
 
         ten.eval(null_values, betas)
 
