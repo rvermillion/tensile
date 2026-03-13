@@ -23,7 +23,7 @@ class ForwardContext(Object):
         doc='The model for which this context is active.'
     )]
     params: Annotated[dict[str, Any], field(
-        doc='The parameters for this context.'
+        doc='The parameters for this context.',
     )]
     stream: Annotated[Optional[ten.Stream], field(
         doc='The stream to use for this forward pass'
@@ -134,7 +134,7 @@ class ForwardContext(Object):
         return forward_ctx.first_of_type(cls) if allow_parent else forward_ctx.cast(cls)
 
     @classmethod
-    def get_training(cls) -> Optional['patchlm.train.training.Training']:
+    def get_training(cls) -> Any:
         ctx = cls.get_current()
         return ctx.training if ctx is not None else None
 
