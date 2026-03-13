@@ -16,6 +16,7 @@ from . import infra, util
 infrastructure = infra
 
 from .shims import ten
+from .util import select
 
 Array = ten.Array
 ArrayLike = ten.ArrayLike
@@ -27,16 +28,7 @@ Selector = ten.Selector
 Shape = ten.Shape
 Slice = slice
 
-class Select:
-
-    __slots__ = ()
-
-    def __getitem__(self, item: Selector) -> Selector:
-        return item
-
-
 full_slice: AxisSelector = slice(None)
-select = Select()
 
 
 __all__ = [
