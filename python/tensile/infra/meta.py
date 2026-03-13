@@ -188,11 +188,12 @@ class Meta(RootObject):
             **kwargs)
         return registry
 
-    def get_factory(self, *, key: str = None, kind: str = None, from_type: str|type = None) -> Optional[Factory[Any]]:
+    def get_factory(self, *, key: str = None, kind: str = None, from_type: str|type = None) -> Optional[Factory]:
         registry = self.registry
         if registry is None:
             # noinspection PyTypeChecker
-            return Registry.method_factory(self.cls, factory_key(key=key, kind=kind, from_type=from_type))
+            return None
+            # return Registry.method_factory(self.cls, factory_key(key=key, kind=kind, from_type=from_type))
         return registry.get_factory(key=key, kind=kind, from_type=from_type)
 
     @staticmethod
