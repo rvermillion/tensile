@@ -81,14 +81,35 @@ def noop(*args, **kwargs):
     pass
 
 
-def process_specs(spec: Optional[Mapping[str, Any]], kwargs: dict[str, Any]) -> tuple[str, Mapping[str, Any]]:
+def process_specs(spec: Optional[Mapping[str, Any]], kwargs: dict[str, Any], single_key: bool = False) -> tuple[Optional[str], Mapping[str, Any]]:
     if spec is None:
-        spec = kwargs
+        kind = kwargs.pop('kind', None)
+        if kind is None and single_key and len(kwargs) == 1:
+            return kwargs.popitem()
+        return kind, kwargs
+    elif kwargs:
+        new_spec = dict(spec)
+        new_spec.update(kwargs)
+        kind = new_spec.pop('kind', None)
+        if kind is None and single_key:
+            if len(new_spec) == 1:
+                return new_spec.popitem()
+            if len(spec) == 1:
+                kind, = spec.keys()
+                subspec = spec[kind]
+                if isinstance(subspec, Mapping):
+                    for k, v in subspec.items():
+                        kwargs.setdefault(k, v)
+                    return kind, kwargs
+                return kind, subspec
+        return kind, new_spec
     else:
-        spec = dict(spec)
-        spec.update(kwargs)
-    kind = spec.pop('kind', None)
-    return kind, spec
+        new_spec = dict(spec)
+        kind = new_spec.pop('kind', None)
+        if kind is None and single_key:
+            if len(new_spec) == 1:
+                return new_spec.popitem()
+        return kind, new_spec
 
 
 def spread(fn: Callable, /, map_fn: Callable = None, seq_fn: Callable = None, scalar_fn: Callable = None) -> Callable[[Mapping[str, Any]], Any]:
