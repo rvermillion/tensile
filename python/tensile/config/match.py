@@ -5,7 +5,7 @@ from ..infra.types import (Any, ClassVar, Optional, Self, Sequence, TYPE_CHECKIN
 
 
 if TYPE_CHECKING:
-    import patchlm.config.config
+    import tensile.config.config
 
 
 range_pat = re.compile(r'^(-?\d*):(-?\d*)$')
@@ -107,11 +107,11 @@ class RegexKeyMatcher(KeyMatcher):
 
 class IndexKeyMatcher(KeyMatcher):
 
-    def matches(self, key: str, config: 'patchlm.config.config.ListConfig' = None, **kwargs) -> bool:
+    def matches(self, key: str, config: 'tensile.config.config.ListConfig' = None, **kwargs) -> bool:
         idx = int(key)
         return self.matches_index(idx, config=config, **kwargs)
 
-    def matches_index(self, idx: int, config: 'patchlm.config.config.ListConfig' = None, **kwargs) -> bool:
+    def matches_index(self, idx: int, config: 'tensile.config.config.ListConfig' = None, **kwargs) -> bool:
         return False
 
 
@@ -126,7 +126,7 @@ class RangeKeyMatcher(IndexKeyMatcher):
         self.start = int(start) if start else None
         self.end = int(end) if end else None
 
-    def matches_index(self, idx: int, config: 'patchlm.config.config.ListConfig' = None, **kwargs) -> bool:
+    def matches_index(self, idx: int, config: 'tensile.config.config.ListConfig' = None, **kwargs) -> bool:
         count = config.count if config else 0
         if start := self.start:
             start = count + start if start < 0 else start
@@ -154,7 +154,7 @@ class ModuloKeyMatcher(IndexKeyMatcher):
         self.size = int(size)
         self.mod = int(mod) if mod else 0
 
-    def matches_index(self, idx: int, config: 'patchlm.config.config.ListConfig' = None, **kwargs) -> bool:
+    def matches_index(self, idx: int, config: 'tensile.config.config.ListConfig' = None, **kwargs) -> bool:
         return idx % self.size == self.mod
 
 
