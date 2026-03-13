@@ -1,5 +1,5 @@
 # Copyright © 2023 Richard Vermillion.
-
+import re
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Sequence
 from typing import Any, Generic, Optional, Self, TypeVar, Union
@@ -163,15 +163,17 @@ class TreeEntry(tuple[str, T]):
         if not traverser.parent_first and traverser.include(self):
             yield self, other
 
-    def left_join(self, other: Optional[Self], traverser: Traverser) -> Iterable[tuple[Self, Optional[Self]]]:
+    def left_join(self, *others: Optional[Self], traverser: Traverser) -> Iterable[tuple[Optional[Self], ...]]:
         if traverser.parent_first and traverser.include(self):
-            yield self, other
+            yield self, *others
         if traverser.descend(self):
             for child in self.children():
-                ochild = None if other is None else other.maybe_child(child.step)
-                yield from child.left_join(ochild, traverser)
+                yield from child.left_join(*(
+                    None if other is None else other.maybe_child(child.step)
+                    for other in others
+                ), traverser=traverser)
         if not traverser.parent_first and traverser.include(self):
-            yield self, other
+            yield self, *others
 
     def is_leaf(self) -> bool:
         return is_leaf_entry(self)
@@ -322,7 +324,8 @@ parent_transform: Transform[TreeEntry, Optional[TreeEntry]] = Transforms.get_att
 step_transform: Transform[TreeEntry, str] = Transforms.get_attr('step')
 
 
-def path_predicate(path_pred: PredicateLike[str]) -> TreePredicate:
+def path_predicate(path_pred: PredicateLike[str]|str) -> TreePredicate:
+    if isinstance(path_pred, str): return path_like(path_pred)
     return Predicates.transform(path_transform, path_pred)
 
 
@@ -361,46 +364,72 @@ is_not_container: TreePredicate = ~is_container
 is_node: TreePredicate = value_is_instance(list, dict, TreeNode)
 
 
-def path_equals(path: str) -> TreePredicateFunction:
+special_path = re.compile(r'[*\[\]]')
+
+def compile_path_re(path: str) -> re.Pattern:
+    parts = path.split('.')
+    for i, part in enumerate(parts):
+        if '**' in part:
+            parts[i] = part.replace('**', '.*')
+        elif '*' in part:
+            parts[i] = part.replace('*', '[^.]*')
+    pat = '^' + r'\.'.join(parts) + '$'
+    return re.compile(re.compile(pat))
+
+
+def is_path_pattern(path: str) -> bool:
+    return bool(special_path.search(path))
+
+
+def path_like(path: str) -> TreePredicate:
+    return path_predicate(
+        Predicates.describe(Predicates.matches(compile_path_re(path)), lambda arg: f"({arg} ~ {path!r})")
+        if is_path_pattern(path)
+        else Predicates.eq(path)
+    )
+
+
+def path_equals(path: str) -> TreePredicate:
     return path_predicate(Predicates.eq(path))
 
 
-def path_startswith(prefix: str) -> TreePredicateFunction:
+def path_startswith(prefix: str) -> TreePredicate:
     return path_predicate(Predicates.starts_with(prefix))
 
 
-def path_contains(part: str) -> TreePredicateFunction:
+def path_contains(part: str) -> TreePredicate:
     return path_predicate(Predicates.contains(part))
 
 
-def path_endswith(suffix: str) -> TreePredicateFunction:
+def path_endswith(suffix: str) -> TreePredicate:
     return path_predicate(Predicates.ends_with(suffix))
 
 
-def path_matches(pattern: str) -> TreePredicateFunction:
+def path_matches(pattern: str|re.Pattern) -> TreePredicate:
     return path_predicate(Predicates.matches(pattern))
 
 
-def step_equals(path: str) -> TreePredicateFunction:
+def step_equals(path: str) -> TreePredicate:
     return step_predicate(Predicates.eq(path))
 
 
-def step_startswith(prefix: str) -> TreePredicateFunction:
+def step_startswith(prefix: str) -> TreePredicate:
     return step_predicate(Predicates.starts_with(prefix))
 
 
-def step_contains(part: str) -> TreePredicateFunction:
+def step_contains(part: str) -> TreePredicate:
     return step_predicate(Predicates.contains(part))
 
 
-def step_endswith(suffix: str) -> TreePredicateFunction:
+def step_endswith(suffix: str) -> TreePredicate:
     return step_predicate(Predicates.ends_with(suffix))
 
 
-def step_matches(pattern: str) -> TreePredicateFunction:
+def step_matches(pattern: str) -> TreePredicate:
     return step_predicate(Predicates.matches(pattern))
 
 
+Predicates.register('tree.path.like', path_like)
 
 
 not_leaf_entry: TreePredicate = is_node
@@ -540,7 +569,7 @@ def join(
 # noinspection PyShadowingNames
 def left_join(
     tree: Tree,
-    other: Tree,
+    *others: Tree,
     is_leaf: Optional[Callable] = None,
     prefix: str = '',
     traverser: Optional[Traverser] = None,
@@ -548,12 +577,13 @@ def left_join(
     include: Optional[Callable] = None,
     descend: Optional[Callable] = None,
     parent_first: bool = False,
-) -> Iterable[tuple[TreeEntry, Optional[TreeEntry]]]:
+) -> Iterable[tuple[Optional[TreeEntry], ...]]:
     if traverser is None:
         traverser = Traverser(is_leaf=is_leaf, include_intermediate=include_intermediate, include=include, descend=descend, parent_first=parent_first)
     entry = TreeEntry(prefix, tree, None, '')
-    oentry = TreeEntry('', other, None, '')
-    return entry.left_join(oentry, traverser=traverser)
+    return entry.left_join(*(
+        TreeEntry('', other, None, '') for other in others
+    ), traverser=traverser)
 
 
 # noinspection PyShadowingNames

@@ -413,7 +413,7 @@ def coerce(spec: PredicateLike[U]) -> Predicate[U]:
 
 
 # noinspection PyUnusedLocal
-def full_coerce(meta, spec: Any = None, /, **kwargs) -> Predicate:
+def full_coerce(spec: Any = None, /, **kwargs) -> Predicate:
     if spec is None:
         spec = kwargs
     elif kwargs and isinstance(spec, Mapping):
@@ -422,6 +422,7 @@ def full_coerce(meta, spec: Any = None, /, **kwargs) -> Predicate:
     return coerce(spec)
 
 
+# noinspection PyTypeChecker
 meta_configure_coerce(Predicate, full_coerce)
 # meta_configure_coerce(PredicateFunction, full_coerce)
 
@@ -1172,23 +1173,52 @@ class IsInstancePredicate(Predicate[Any]):
         return f'isinstance({arg}, {class_qname(self.cls)})'
 
 
+class DelegatePredicate(Predicate[U]):
+
+    __slots__ = ('delegate', 'describe',)
+
+    delegate: Predicate[U]
+    describe: Callable[[str], str]
+
+    def __init__(self, delegate: Predicate[U], describe: Callable[[str], str]):
+        super().__init__(delegate.evaluate)
+        self.delegate = delegate
+        self.describe = describe
+
+    def _implies(self, other: 'Predicate[U]', reverse: bool) -> bool:
+        return self.delegate._implies(other, reverse)
+
+    def _is_denied_by(self, other: 'Predicate[U]', reverse: bool) -> bool:
+        return self.delegate._is_denied_by(other, reverse)
+
+    def _is_implied_by(self, other: 'Predicate[U]', reverse: bool) -> bool:
+        return self.delegate._is_implied_by(other, reverse)
+
+    def _denies(self, other: 'Predicate[U]', reverse: bool) -> bool:
+        return self.delegate._denies(other, reverse)
+
+    def _eq_tuple(self) -> tuple:
+        return self.delegate._eq_tuple()
+
+
 class CustomPredicate(Predicate[U]):
 
-    __slots__ = ('_implies', '_denies', '_is_implied_by', '_is_denied_by', 'eq_tuple' 'describe', 'info')
+    __slots__ = ('_implies', '_denies', '_is_implied_by', '_is_denied_by', 'describe', 'eq_tuple', 'info')
 
     _implies: PredicateFunction[Predicate]
     _denies: PredicateFunction[Predicate]
     _is_implied_by: PredicateFunction[Predicate]
     _is_denied_by: PredicateFunction[Predicate]
     eq_tuple: tuple
-    describe: Callable[[str], str]
     info: Any
+    describe: Callable[[str], str]
+
 
     def __init__(self, evaluate: PredicateFunction[U], implies: PredicateFunction[Predicate] = None,
                  denies: PredicateFunction[Predicate] = None, is_implied_by: PredicateFunction[Predicate] = None,
                  is_denied_by: PredicateFunction[Predicate] = None,
                  eq_tuple: tuple = None,
-                 describe: Callable[['CustomPredicate', str], str] = None,
+                 describe: Callable[[Predicate, str], str] = None,
                  info: Any = None):
         super().__init__(evaluate)
         self.predicate = evaluate
@@ -1203,8 +1233,13 @@ class CustomPredicate(Predicate[U]):
         else:
             self.describe = lambda arg: describe(self, arg)
 
+
     def _eq_tuple(self) -> tuple:
         return self.eq_tuple
+
+
+def describe(pred: Predicate[U], desc: Callable[[str], str]) -> Predicate[U]:
+    return DelegatePredicate(pred, desc)
 
 
 class Predicates:
@@ -1272,26 +1307,38 @@ class Predicates:
     def contains(s: str) -> Predicate[str]:
         def pred(x: str) -> bool:
             return s in x
-        return Predicates.is_str & Predicate(name_function(pred, f'contains[{s!r}]'))
+        base = Predicate(name_function(pred, f'contains[{s!r}]'))
+        return Predicates.is_str & describe(base, lambda p, arg: f'({arg} in {s!r})')
 
     @staticmethod
-    def matches(s: str) -> Predicate[str]:
-        pat = re.compile(s)
+    def matches(s: str|re.Pattern) -> Predicate[str]:
+        if isinstance(s, re.Pattern):
+            pat = s
+            s = pat.pattern
+        else:
+            pat = re.compile(s)
         def pred(x: str) -> bool:
             return pat.match(x) is not None
-        return Predicates.is_str & Predicate(name_function(pred, f'matches[/{s}/]'))
+        base = Predicate(name_function(pred, f'matches[/{s}/]'))
+        return Predicates.is_str & describe(base, lambda p, arg: f'({arg} ~= /{s}/)')
 
     @staticmethod
     def starts_with(s: str) -> Predicate[str]:
         def pred(x: str) -> bool:
             return x is not None and x.startswith(s)
-        return Predicates.is_str & Predicate(name_function(pred, f'starts_with[{s!r}]'))
+        base = Predicate(name_function(pred, f'starts_with[{s!r}]'))
+        return Predicates.is_str & describe(base, lambda p, arg: f'{arg}.startswith({s!r})')
 
     @staticmethod
     def ends_with(s: str) -> Predicate[str]:
         def pred(x: str) -> bool:
             return x is not None and x.endswith(s)
-        return Predicates.is_str & Predicate(name_function(pred, f'ends_with[{s!r}]'))
+        base = Predicate(name_function(pred, f'ends_with[{s!r}]'))
+        return Predicates.is_str & describe(base, lambda p, arg: f'{arg}.endswith({s!r})')
+
+    @staticmethod
+    def describe(pred: Predicate[U], describe: Callable[[str], str]) -> Predicate[U]:
+        return DelegatePredicate(pred, describe)
 
     @staticmethod
     def with_attr(name: str, predicate: PredicateLike, if_missing: bool = False) -> Predicate:
