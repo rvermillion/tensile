@@ -24,6 +24,7 @@ def is_module(value: Any) -> bool:
     return isinstance(value, Module)
 
 is_module_entry: tree.TreePredicate = tree.value_predicate(is_module)
+not_module_entry = ~is_module_entry
 
 is_parameter: Predicate = tree.is_array
 
@@ -58,9 +59,11 @@ def is_leaf_module_entry(entry: TreeEntry) -> bool:
 
 is_leaf_module_traverser = tree.Traverser(include=is_leaf_module_entry)
 is_parameter_traverser = tree.Traverser(include=is_parameter_entry)
+is_own_parameter_traverser = tree.Traverser(include=is_parameter_entry, descend=not_module_entry)
 is_trainable_parameter_traverser = tree.Traverser(include=is_trainable_parameter_entry)
+is_own_trainable_parameter_traverser = tree.Traverser(include=is_parameter_entry, descend=not_module_entry)
 is_module_traverser = tree.Traverser(include=is_module_entry)
-child_traverser = tree.Traverser(include=is_module_entry, descend=~is_module_entry)
+child_traverser = tree.Traverser(include=is_module_entry, descend=not_module_entry)
 
 
 
@@ -81,6 +84,18 @@ module_built = False
 
 
 class ModuleField(meta.Field):
+    """An extension to the Field class to add extra functionality for Modules.
+
+    Any fields that are of type Module or ten.Array will be added to the Module's children
+    for purposes of tree navigation. Also, for fields that are Modules, a coercer will
+    automatically be added so that it can be built from a dict.
+
+    In addition to the normal field behaviors, it supports:
+    - Parameter tracking: fields can be marked as parameters so that the framework
+                          can make them Parameters for torch
+    - Tree traversal: fields can be marked with tree=False to prevent them from being included
+
+    """
 
     __slots__ = ()
 
@@ -156,46 +171,53 @@ class ModuleMeta(meta.ObjectMeta):
 
     Field = ModuleField
 
-    # def slot_names(self, name: str) -> Iterable[str]:
-    #     return module_slot(name),
-
 
 ModuleTreeValue = Union[Array, 'Module']
 
 
 class Module(Object, tree.TreeNode[ModuleTreeValue]):
+    """The Module base class that all modules should inherit from. It is a
+    TreeNode and can participate in tree traversals and is smart about
+    keeping track of its children. But unlike in many frameworks, it does
+    not inherit from dict and is an actual object with slots for performance
+    and correctness.
+
+    The `call` property holds the function that will actually be executed
+    when this module is called.  See the CompiledModule subclass for
+    details about how this can be used.
+    """
 
     __slots__ = ('args', 'call', 'training', 'instrument',
                  '_children', '_parent', '_name', '_no_grad', '_lifecycle', )
 
     args: Annotated[ModuleArgs, field(
-        doc='Module arguments',
+        doc='Module arguments that were used to construct the module.',
     )]
     call: Annotated[Callable[..., Any], field(
-        doc='Module call function',
+        doc='Module call function, executed when the module is called.',
     )]
     training: Annotated[bool, field(
-        doc='Whether the module is in training mode',
+        doc='Whether the module is in training mode or not.',
         default=False,
     )]
     instrument: Annotated[Optional['Instrument'], field(
-        doc='Instrument object',
+        doc='An Instrument object that can be attached to the module for monitoring and profiling.',
     )]
     _lifecycle: Annotated[Object.Lifecycle, field(
         doc='Current module lifecycle state',
         default=Object.Lifecycle.unknown,
     )]
     _children: Annotated[dict[str, Any], field(
-        doc='Module child nodes',
+        doc='A dict of child nodes of this Module. The framework takes care of managing this.',
         readonly=True,
         default_factory=dict,
     )]
     _parent: Annotated[Optional['Module'], field(
-        doc='Parent module',
+        doc='The parent Module of this Module.',
         default=None,
     )]
     _name: Annotated[Optional[str], field(
-        doc='Name of the module',
+        doc='The name the module, which corresponds to where it is in the module tree.',
         default=None,
         init_order=0,
     )]
@@ -278,7 +300,7 @@ class Module(Object, tree.TreeNode[ModuleTreeValue]):
             return mod
         if isinstance(mod, Module) and not self._should_dropout(mod):
                 return mod
-        dropout = meta.for_qname('patchlm.nn.layers.dropout.Dropout').coerce(p=p, d=d)
+        dropout = meta.for_qname('tensile.nn.layers.dropout.Dropout').coerce(p=p, d=d)
         if not callable(dropout):
             raise TypeError(f'Dropout must be callable, got {dropout}')
 
@@ -296,9 +318,16 @@ class Module(Object, tree.TreeNode[ModuleTreeValue]):
 
     def set_instrument(self, instrument: Instrument | Callable, compose: bool = False) -> None:
         if compose:
-            instrument = Instrument.compose(self.instrument, instrument)
+            instrument = Instrument.compose(self.instrument, Instrument.coerce(instrument))
         self.instrument = instrument
-        # self._configure_call(self._generate_call())
+
+    def remove_instrument(self, instrument: Instrument = None, *, where: Predicate['Instrument']) -> None:
+        if self.instrument is None:
+            return
+        if instrument is None:
+            self.instrument = self.instrument.remove(where)
+        else:
+            self.instrument -= instrument
 
     def train_call(self, *args, **kwargs):
         return self.eval_call(*args, **kwargs)
@@ -511,21 +540,26 @@ class Module(Object, tree.TreeNode[ModuleTreeValue]):
             The module instance after freezing the parameters.
         """
 
-        def _freeze_impl(path: str, mod: Module):
-            local_keys = keys
-            if local_keys is None:
-                local_keys = tree.flatten(mod, include=is_parameter_entry,
-                                          descend=~is_module_entry, force_descend=True)
-                local_keys = [k for (k, v) in local_keys]
-
-            local_keys = mod._validate_keys(local_keys, strict)
-            mod._no_grad.update(local_keys)
+        if isinstance(keys, str): keys = [keys]
 
         if recurse:
-            self.apply_to_modules(_freeze_impl, spread=True)
+            def freeze(mod: Module):
+                mod._freeze(keys, strict)
+            self.apply_to_modules(freeze, just_value=True)
         else:
-            _freeze_impl("", self)
+            self._freeze()
         return self
+
+    def _freeze(self, keys: list[str] = None, strict: bool = False):
+        if keys is None:
+            local_keys = []
+            for e in tree.traverse(self, traverser=is_own_parameter_traverser, force_descend=True):
+                local_keys.append(e.step)
+        else:
+            local_keys = keys
+
+        local_keys = self._validate_keys(local_keys, strict)
+        self._no_grad.update(local_keys)
 
     def unfreeze(
         self,
@@ -535,25 +569,28 @@ class Module(Object, tree.TreeNode[ModuleTreeValue]):
         strict: bool = False,
     ) -> Self:
 
-        def _unfreeze_impl(path: str, mod: Module):
-            if keys is None:
-                mod._no_grad.clear()
-
-            else:
-                local_keys = mod._validate_keys(keys, strict)
-                mod._no_grad.difference_update(local_keys)
+        if isinstance(keys, str): keys = [keys]
 
         if recurse:
-            self.apply_to_modules(_unfreeze_impl, spread=True)
+            def unfreeze(mod: Module):
+                mod._unfreeze(keys, strict)
+            self.apply_to_modules(unfreeze, just_value=True)
         else:
-            _unfreeze_impl("", self)
+            self._unfreeze(keys, strict)
+
+        return self
+
+    def _unfreeze(self, keys: list[str] = None, strict: bool = False):
+        if keys is None:
+            self._no_grad.clear()
+        else:
+            local_keys = self._validate_keys(keys, strict)
+            self._no_grad.difference_update(local_keys)
 
         if self.keep_frozen:
             """Wrap unfreeze so that we unfreeze any layers we might contain but
             our parameters will remain frozen."""
             self.freeze(recurse=False, keys=self.frozen_keys)
-
-        return self
 
     def validate_args(self, args: ModuleArgs) -> None:
         if args is None:
@@ -581,15 +618,21 @@ class Module(Object, tree.TreeNode[ModuleTreeValue]):
     def __getitem__(self, key: str) -> Any:
         return self._children[key]
 
-    def parameters(self) -> tree.Tree[ten.Array]:
+    def parameters(self, own: bool = False) -> tree.Tree[ten.Array]:
         """Recursively return all the :class:`mlx.core.array` members of this Module
         as a dict of dicts and lists."""
-        return tree.filter(self, traverser=is_parameter_traverser)
+        if own:
+            return tree.filter(self, traverser=is_own_parameter_traverser, force_descend=True)
+        else:
+            return tree.filter(self, traverser=is_parameter_traverser)
 
-    def trainable_parameters(self) -> tree.Tree[ten.Array]:
+    def trainable_parameters(self, own: bool = False) -> tree.Tree[ten.Array]:
         """Recursively return all the non frozen :class:`mlx.core.array` members of
         this Module as a dict of dicts and lists."""
-        return tree.filter(self, traverser=is_trainable_parameter_traverser)
+        if own:
+            return tree.filter(self, traverser=is_own_trainable_parameter_traverser, force_descend=True)
+        else:
+            return tree.filter(self, traverser=is_trainable_parameter_traverser)
 
     def children(self) -> tree.Tree['Module']:
         """Return the direct descendants of this Module instance."""
@@ -614,13 +657,6 @@ class Module(Object, tree.TreeNode[ModuleTreeValue]):
                     value = args.get(arg, default=value)
             setattr(self, arg, value)
         return self
-
-    # @contextlib.contextmanager
-    # def trainer(self, trainer: 'patchlm.train.trainer.Trainer'):
-    #     try:
-    #         yield self
-    #     finally:
-    #         pass
 
     def _repr_args(self, **options) -> str:
         in_dim, out_dim = self.in_dim, self.out_dim
@@ -865,8 +901,13 @@ class Module(Object, tree.TreeNode[ModuleTreeValue]):
     def _coerce_from_str(cls, spec: str, /, **kwargs):
         return cls.from_args(cls.Args.from_dict({}), kind=spec, **kwargs)
 
+    # The forward context that this module uses. Subclasses can override this.
     ForwardContext: ClassVar[type[ForwardContext]] = ForwardContext
+
+    # The ModuleArgs subclass to use to build this Module. Subclasses can override this.
     Args: ClassVar[type[ModuleArgs]] = ModuleArgs
+
+    # We tell the framework to use the special ModuleMeta class
     Meta = ModuleMeta
 
 
@@ -880,13 +921,26 @@ tie_call(Module, 'call')
 module_built = True
 
 meta.for_class(Module).configure_registry(
-    modules='patchlm.nn.layers',
+    modules='tensile.nn.layers',
     append_kind=True,
 )
 
 
 
 class CompiledModule(Module):
+    """The CompiledModule class extends Module and provides support for building
+    and memoizing a `call` method. When the module is called the first time,
+    the :meth:`build_call` method is called to generate a closure that will subsequently
+    be called when the module is called.  This allows subclasses to return
+    different implementation based on their parameters.
+
+    All of the modules in `tensile.nn.layers` extend this class and take advantage
+    of the compilation.
+
+    Fields of a compiled module can be marked with `changed=CompiledModule.recompile`
+    to indicate that they should invalidate the compiled function and force it
+    to be regenerated on the next call.
+    """
 
     __slots__ = ('train_call', 'eval_call')
 
