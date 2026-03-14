@@ -158,8 +158,9 @@ class TreeEntry(tuple[str, T]):
             yield self, other
         if traverser.descend(self):
             for ochild in other.children():
-                child = self.get_child(ochild.step)
-                yield from child.join(ochild, traverser)
+                child = self.maybe_child(ochild.step)
+                if child is not None:
+                    yield from child.join(ochild, traverser)
         if not traverser.parent_first and traverser.include(self):
             yield self, other
 
@@ -558,7 +559,8 @@ def join(
     include: Optional[Callable] = None,
     descend: Optional[Callable] = None,
     parent_first: bool = False,
-) -> Iterable[tuple[TreeEntry, TreeEntry]]:
+    type: type[T] = None,
+) -> Iterable[tuple[TreeEntry[T], TreeEntry[T]]]:
     if traverser is None:
         traverser = Traverser(is_leaf=is_leaf, include_intermediate=include_intermediate, include=include, descend=descend, parent_first=parent_first)
     entry = TreeEntry(prefix, tree, None, '')
