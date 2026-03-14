@@ -1,5 +1,7 @@
 #  Copyright (c) 2026. Richard Vermillion. All Rights Reserved.
 
+import importlib
+
 from . import log
 from .root import RootObject
 from .types import *
@@ -47,7 +49,63 @@ class Factory(Protocol[T]):
     def __call__(self, spec: Any = None, /, **kwargs) -> T: ...
 
 
-RegistryFallback = Callable[['Registry', str], None]
+class ModuleFallback(RootObject):
+
+    __slots__ = ('modules', 'modules_tried', 'append_kind', 'register',)
+
+    modules: list[str]
+    modules_tried: int
+    append_kind: bool
+    register: bool
+
+    def __init__(self, modules: list[str], *, append_kind: bool = False, register: bool = None) -> None:
+        self.modules = list(modules)
+        self.modules_tried = 0
+        self.append_kind = append_kind
+        if register is None:
+            register = not append_kind
+        self.register = register
+
+    def iter_modules(self, kind: str) -> Iterable[str]:
+        if self.append_kind:
+            for module_name in self.modules:
+                yield f'{module_name}.{kind}'
+        for module_name in self.modules[self.modules_tried:]:
+            self.modules_tried += 1
+            yield module_name
+
+    def __call__(self, registry: 'Registry', key: str) -> None:
+        if self.modules_tried < len(self.modules):
+            kind = key[len(kind_prefix):]
+            for mname in self.iter_modules(kind):
+                try:
+                    module = importlib.import_module(mname)
+                    self.warn('{}: dynamically loaded module [{}] for kind [{}]', registry, mname, kind)
+                    if registry.namespaces is None:
+                        registry.namespaces = [module]
+                    else:
+                        registry.namespaces.append(module)
+                    factory = registry.peek_factory(key)
+                    if factory is not None:
+                        return
+                    if self.register:
+                        obj = getattr(module, kind, None)
+                        if obj is not None:
+                            registry.register_object(key, obj)
+                    return
+                except ImportError:
+                    self.warn('{}: dynamically loading module [{}] for kind [{}]', registry, mname, kind)
+
+            raise ValueError(f'{registry}: Nothing registered with kind [{kind}]')
+
+    def _repr_args(self, **options) -> str:
+        rep = ', '.join(self.modules)
+        if self.append_kind:
+            rep += ', +append_kind'
+        if self.register:
+            rep += ', +register'
+        return rep
+
 
 kind_prefix = 'kind:'
 from_prefix = 'from:'
@@ -108,21 +166,22 @@ class Kinds(RootObject):
 
 class Registry(RootObject, Generic[T]):
 
-    __slots__ = ['ifc', 'meta', 'factories', 'fallbacks', 'namespaces', 'default_kind', 'kinds']
+    __slots__ = ['ifc', 'meta', 'factories', 'fallback', 'namespaces', 'default_kind',
+                 'kinds']
 
     ifc: type[T]
     meta: 'Meta'
     factories: dict[str, Factory[T]]
-    fallbacks: tuple[RegistryFallback, ...]
+    fallback: Optional[ModuleFallback]
     namespaces: Optional[list]
     default_kind: Optional[str]
     kinds: Optional[Kinds]
 
-    def __init__(self, ifc: type[T], meta: 'Meta', fallbacks: Iterable[RegistryFallback] = None):
+    def __init__(self, ifc: type[T], meta: 'Meta'):
         self.ifc = ifc
         self.meta = meta
         self.factories = {}
-        self.fallbacks = () if fallbacks is None else tuple(fallbacks)
+        self.fallback = None
         self.namespaces = None
         self.default_kind = None
         self.kinds = None
@@ -132,19 +191,17 @@ class Registry(RootObject, Generic[T]):
         if default_kind is not None:
             self.default_kind = default_kind
         if modules:
-            if isinstance(modules, str):
-                modules = modules,
-            self.push_fallback(self.make_module_fallback(modules, append_kind=append_kind))
+            self.add_search_packages(modules, append_kind)
 
-    def push_fallback(self, fallback: RegistryFallback) -> None:
-        self.fallbacks = self.fallbacks + (fallback, )
-
-    def pop_fallback(self) -> Optional[RegistryFallback]:
-        if fallbacks := self.fallbacks:
-            fallback = fallbacks[0]
-            self.fallbacks = fallbacks[1:]
-            return fallback
-        return None
+    def add_search_packages(self, modules: Union[str, Sequence[str]], append_kind: bool = False) -> None:
+        if isinstance(modules, str):
+            modules = [modules]
+        if fallback := self.fallback:
+            fallback.modules.extend(modules)
+            if append_kind:
+                fallback.append_kind = True
+        else:
+            self.fallback = ModuleFallback(modules, append_kind=append_kind)
 
     def add_kind(self, impl: type, kind: str, primary: bool = False):
         if kinds := self.kinds:
@@ -190,11 +247,14 @@ class Registry(RootObject, Generic[T]):
         return None
 
     def fallback_factory(self, key: str) -> Optional[Factory[T]]:
-        if self.fallbacks:
-            while fallback := self.pop_fallback():
-                fallback(self, key)
-                if factory := self.peek_factory(key):
-                    return factory
+        if self.fallback:
+            self.fallback(self, key)
+            if factory := self.peek_factory(key):
+                return factory
+            # while fallback := self.pop_fallback():
+            #     fallback(self, key)
+            #     if factory := self.peek_factory(key):
+            #         return factory
         return None
 
     def register_object(self, key: str, obj: T):
@@ -242,8 +302,8 @@ class Registry(RootObject, Generic[T]):
     def _repr_args(self) -> str:
         return class_qname(self.ifc)
 
-    @classmethod
-    def method_factory(cls, ifc: type[T], key: str, reg: 'Registry[T]' = None) -> Optional[Factory[T]]:
+    @staticmethod
+    def method_factory(ifc: type[T], key: str, reg: 'Registry[T]' = None) -> Optional[Factory[T]]:
         if key.startswith('from:'):
             fallback_method = f'_coerce_from_{key[5:]}'
             return getattr(ifc, fallback_method, None)
@@ -252,63 +312,4 @@ class Registry(RootObject, Generic[T]):
         elif key == 'kind:default' or key == 'default':
             return getattr(ifc, 'provide_from', ifc)
         return None
-
-    def make_module_fallback(self, modules: Union[str, Sequence[str]],
-                             append_kind: bool = False,
-                             register: bool = None) -> RegistryFallback:
-        if not modules:
-            raise ValueError('Must specify one or more modules to search in')
-
-        if isinstance(modules, str):
-            modules = modules,
-        elif not isinstance(modules, Sequence) and all(isinstance(m, str) for m in modules):
-            raise ValueError('modules must be a string or a sequence of strings')
-
-        import importlib
-
-        if append_kind:
-            if register is None:
-                register = False
-
-            def fallback(registry: Registry[T], key: str) -> T:
-                kind = key[len(kind_prefix):]
-                for module_name in modules:
-                    for mname in (f'{module_name}.{kind}', module_name):
-                        try:
-                            registry.debug('{}: dynamically loading module [{}] for kind [{}]', registry, mname, kind)
-                            module = importlib.import_module(mname)
-                            if register:
-                                obj = getattr(module, kind, None)
-                                if obj is not None:
-                                    registry.register_object(key, obj)
-                            return
-                        except ImportError:
-                            pass
-
-                raise ValueError(f'{registry}: Nothing registered with kind [{kind}]')
-        else:
-            if register is None:
-                register = True
-
-            def fallback(registry: Registry[T], key: str) -> T:
-                kind = key[len(kind_prefix):]
-                for mname in modules:
-                    try:
-                        registry.debug('{}: dynamically loading module [{}] for kind [{}]', registry, mname, kind)
-                        module = importlib.import_module(mname)
-                        if registry.namespaces is None:
-                            registry.namespaces = [module]
-                        else:
-                            registry.namespaces.append(module)
-                        obj = getattr(module, kind, None)
-                        if obj is not None:
-                            if register:
-                                registry.register_object(key, obj)
-                            return
-                    except ImportError:
-                        pass
-
-                raise ValueError(f'{registry}: Nothing registered with kind [{kind}]')
-
-        return fallback
 
