@@ -1,5 +1,23 @@
 #  Copyright (c) 2025-2026. Richard Vermillion. All Rights Reserved.
 
+"""Optimizer abstractions and configuration helpers.
+
+This module defines the core optimizer-facing data structures used by the
+training stack:
+
+- :class:`BasicStepHandler` for start/end step callbacks
+- :class:`OptimizerSchedules` for named schedule management
+- :class:`OptimizerConfig` and concrete config types for algorithm settings
+- :class:`OptimizerParamGroup` for grouping parameters under shared schedules
+- :class:`Optimizer` as the abstract optimizer interface
+
+The design separates optimizer configuration from backend implementation so
+multiple execution backends can reuse the same scheduling and parameter-group
+logic.
+"""
+from collections.abc import Container
+from pathlib import Path
+
 from ..infra import RootObject
 from ..infra.util import StringBuffer
 from ..nn import Module
@@ -13,6 +31,16 @@ from .types import (
 
 
 class BasicStepHandler(RootObject, Generic[Batch]):
+    """Simple callback container invoked at the start and end of each optimizer step.
+
+    The handler is intentionally lightweight: it just stores two callables and
+    lets :class:`Optimizer` invoke them during step execution.
+
+    Attributes:
+        on_start: Called before gradients are computed for a batch.
+        on_end: Called after the loss has been computed and the step is about
+            to finish.
+    """
 
     __slots__ = ('on_start', 'on_end')
 
@@ -26,7 +54,14 @@ class BasicStepHandler(RootObject, Generic[Batch]):
         self.on_end = on_end
 
 
-class OptimizerSchedules:
+class OptimizerSchedules(RootObject):
+    """Container for named optimizer schedules.
+
+    The object behaves like a small registry for per-optimizer schedule objects
+    such as learning rate, momentum, or weight decay schedules. It can return
+    either the schedules themselves or their current scalar values for a given
+    step.
+    """
 
     __slots__ = ('schedules',)
 
@@ -44,6 +79,16 @@ class OptimizerSchedules:
                     self.schedules[name] = schedule
 
     def alias(self, include_constant: bool = False, aliases: dict[str, str] = None) -> dict[str, OptimizerSchedule]:
+        """Return schedules keyed by aliased names.
+
+        Args:
+            include_constant: Whether to include schedules marked as constant.
+            aliases: Optional mapping from internal schedule names to backend or
+                display names.
+
+        Returns:
+            A dictionary of schedule objects keyed by aliased names.
+        """
         if aliases is None:
             def alias(name: str) -> str: return name
         else:
@@ -53,6 +98,16 @@ class OptimizerSchedules:
         return {alias(k): v for k, v in self.schedules.items() if not v.constant}
 
     def get(self, step: Array, include_constant: bool = False, aliases: dict[str, str] = None) -> dict[str, float]:
+        """Evaluate schedules at a given step.
+
+        Args:
+            step: Current optimizer step.
+            include_constant: Whether to include constant schedules.
+            aliases: Optional mapping from internal names to alternate keys.
+
+        Returns:
+            A mapping from schedule name to evaluated scalar value.
+        """
         if aliases is None:
             def alias(name: str) -> str: return name
         else:
@@ -62,11 +117,18 @@ class OptimizerSchedules:
         return {alias(k): v(step).item() for k, v in self.schedules.items() if not v.constant}
 
     def get_static(self) -> dict[str, Array]:
+        """Return schedules whose values are constant across all steps."""
         step = ten.array(0, dtype=ten.int32)
         return {k: v(step) for k, v in self.schedules.items() if v.constant}
 
 
 class OptimizerConfig(Object):
+    """Base configuration object for optimizers.
+
+    Subclasses declare algorithm-specific schedules and hyperparameters. The
+    config is responsible for exposing values in a backend-friendly form while
+    still preserving higher-level schedule objects.
+    """
 
     __slots__ = ('schedules', 'learning_rate')
 
@@ -83,9 +145,23 @@ class OptimizerConfig(Object):
     hyperparameter_names: ClassVar[tuple[str, ...]] = ()
 
     def _lazy_schedules(self) -> OptimizerSchedules:
+        """Build the schedule registry from declared schedule fields."""
         return OptimizerSchedules({name: getattr(self, name) for name in self.schedule_names})
 
     def inherit(self, spec: dict[str, Any]|None) -> dict[str, Any]:
+        """Fill missing values in a config spec from this config.
+
+        This is primarily used when parameter groups partially override a
+        default optimizer configuration.
+
+        Args:
+            spec: Partial config specification.
+
+        Returns:
+            A new or updated specification containing inherited defaults. If the
+            requested algorithm differs from this config's algorithm, the spec is
+            returned unchanged.
+        """
         if spec is None: spec = {}
         algo = spec.setdefault('kind', self.algorithm)
         if self.algorithm != algo:
@@ -99,6 +175,10 @@ class OptimizerConfig(Object):
         return spec
 
     def backend_hyperparameters(self, aliases: dict[str, str|None]) -> dict[str, Any]:
+        """Return non-scheduled hyperparameters, applying backend aliases.
+
+        Any alias mapped to ``None`` is omitted from the result.
+        """
         hyper = {}
         for name in self.hyperparameter_names:
             alias = aliases.get(name, name)
@@ -121,12 +201,19 @@ class OptimizerConfig(Object):
         return str(buff)
 
 
-def filter_tree(arrays: tree.Tree[Array], paths: set[str]) -> tree.Tree[Array]:
+def filter_tree(arrays: tree.Tree[Array], paths: Container[str]) -> tree.Tree[Array]:
+    """Filter a parameter or gradient tree down to a set of named paths."""
     return tree.filter(arrays, include=lambda e: e.path in paths and ten.is_array(e.value))
 
 
 
 class OptimizerParamGroup(Object):
+    """A named subset of optimizer parameters sharing one configuration.
+
+    Parameter groups allow different subsets of model parameters to use distinct
+    schedules or hyperparameters while still being managed by a single
+    optimizer object.
+    """
 
     __slots__ = ('optimizer', 'group', 'params', 'param_tree', 'schedules', 'config')
 
@@ -149,12 +236,14 @@ class OptimizerParamGroup(Object):
     )]
 
     def _coerce_params(self, spec: Any) -> set[str]:
+        """Normalize parameter specifications into a set of parameter paths."""
         if spec is None: return set()
         if isinstance(spec, str): return {spec}
         if isinstance(spec, Iterable): return set(spec)
         raise ValueError(f'Invalid parameter spec: {spec}')
 
     def _coerce_config(self, spec: Any) -> OptimizerConfig:
+        """Coerce a group config, inheriting defaults from the parent optimizer."""
         if isinstance(spec, OptimizerConfig): return spec
         default_config = self.optimizer.config
         if default_config is None:
@@ -164,12 +253,15 @@ class OptimizerParamGroup(Object):
         return coerce(OptimizerConfig, spec)
 
     def _lazy_schedules(self) -> OptimizerSchedules:
+        """Expose the schedule registry from the resolved config."""
         return self.config.schedules
 
     def filter_tree(self, arrays: tree.Tree[Array]) -> tree.Tree[Array]:
+        """Return only entries belonging to this parameter group."""
         return filter_tree(arrays, self.params)
 
     def filter_params(self, arrays: tree.Tree[Array]) -> list[Array]:
+        """Extract this group's arrays from a tree as a flat list."""
         group_paths = self.params
         params = []
         def include(e: tree.TreeEntry):
@@ -182,9 +274,11 @@ class OptimizerParamGroup(Object):
         return params
 
     def current_schedule(self, step: Array, include_constant: bool = False) -> dict[str, float]:
+        """Evaluate this group's schedules for the given step."""
         return self.schedules.get(step, include_constant)
 
     def get_hyperparameters(self, step: Array) -> dict[str, Any]:
+        """Return current schedule values as backend-ready hyperparameters."""
         if schedule := self.current_schedule(step, include_constant=True):
             hyper = {n: s for n, s in schedule.items()}
         else:
@@ -195,7 +289,32 @@ class OptimizerParamGroup(Object):
         return f'{self.group}: {len(self.params)} params'
 
 
+class OptimizerParamInfo(RootObject):
+    """Information about a single optimizer parameter."""
+
+    __slots__ = ('path', 'group', 'state')
+
+    path: Annotated[str, field()]
+    group: Annotated[OptimizerParamGroup, field()]
+    state: Annotated[dict[str, Any], field()]
+
+    def __init__(self, path: str, group: OptimizerParamGroup, state: dict[str, Any]):
+        super().__init__()
+        self.path = path
+        self.group = group
+        self.state = state
+
+    def _repr_args(self, **options) -> str:
+        return self.path + f', group={self.group.group}'
+
+
 class Optimizer(Object, Generic[Batch]):
+    """Abstract optimizer wrapper shared across tensor backends.
+
+    This class owns parameter selection, grouping, scheduling, and lifecycle
+    hooks, while backend-specific subclasses implement the actual stepping
+    logic in :meth:`stepper`.
+    """
 
     __slots__ = ('model', 'params', 'config', 'all_params', 'learning_rate', 'eps', 'current_step', 'param_groups',
                  'step_handler', 'backends')
@@ -206,7 +325,7 @@ class Optimizer(Object, Generic[Batch]):
     params: Annotated[Optional[set[str]], field(
         doc='The parameters for this optimizer.',
     )]
-    all_params: Annotated[set[str], field(
+    all_params: Annotated[dict[str, OptimizerParamInfo], field(
         doc='All parameters for this optimizer.',
     )]
     config: Annotated[Optional[OptimizerConfig], field(
@@ -215,7 +334,7 @@ class Optimizer(Object, Generic[Batch]):
     )]
     current_step: Annotated[Array, field(
         doc='The current step of the optimizer.',
-        default_factory=lambda: ten.array(0, dtype=ten.int32)
+        default_factory=lambda: ten.array(0, dtype=ten.uint64)
     )]
     param_groups: Annotated[list[OptimizerParamGroup], field(
         doc='The parameter groups for this optimizer.',
@@ -262,11 +381,28 @@ class Optimizer(Object, Generic[Batch]):
         else:
             raise ValueError(f'Invalid parameter group spec: {spec}')
 
-    def _lazy_all_params(self) -> set[str]:
-        all_params = set()
-        for pg in self.param_groups:
-            all_params.update(pg.params)
+    def _lazy_all_params(self) -> dict[str, OptimizerParamInfo]:
+        all_params = {}
+        for param_group in self.param_groups:
+            for name in param_group.params:
+                all_params[name] = self.build_param_info(name, param_group)
         return all_params
+
+    def _coerce_current_step(self, spec: Any) -> Array:
+        if spec is None:
+            return ten.array(0, dtype=ten.uint64)
+        elif isinstance(spec, Array):
+            return spec
+        elif isinstance(spec, int):
+            return ten.array(spec, dtype=ten.int64)
+        else:
+            raise TypeError(f'Invalid current_step specification: {spec}')
+
+    def set_current_step(self, step: Array) -> None:
+        self.current_step = step
+
+    def build_param_info(self, path: str, group: OptimizerParamGroup) -> OptimizerParamInfo:
+        return OptimizerParamInfo(path, group, {})
 
     def postinit(self, spec: Spec):
         super().postinit(spec)
@@ -278,7 +414,7 @@ class Optimizer(Object, Generic[Batch]):
             self.param_groups.append(OptimizerParamGroup(
                 group=0,
                 params=params,
-                schedules=self.default_schedules(),
+                config=self.config,
             ))
         self._validate_param_groups(self.param_groups)
 
@@ -326,6 +462,14 @@ class Optimizer(Object, Generic[Batch]):
     def start_step(self, batch: Batch) -> None:
         if step_handler := self.step_handler:
             step_handler.on_start(self, batch)
+
+    def save(self, path: str|Path, **kwargs) -> None:
+        """Save the optimizer state to a file."""
+        raise NotImplementedError()
+
+    def load(self, path: str|Path, **kwargs) -> None:
+        """Load the optimizer state from a file."""
+        raise NotImplementedError()
 
     def get_hyperparameters(self, group: int = None) -> dict[str, Any]:
         step = self.current_step
@@ -418,25 +562,24 @@ class SGDConfig(OptimizerConfig):
     hyperparameter_names = ('nesterov',)
 
 
-@provides(OptimizerConfig, 'adamw')
-class AdamWConfig(OptimizerConfig):
 
-    __slots__ = ('weight_decay', 'betas', 'eps',)
+@provides(OptimizerConfig, 'adam')
+class AdamConfig(OptimizerConfig):
 
-    weight_decay: Annotated[Optional[OptimizerSchedule], field(
-        doc='The weight decay coefficient for AdamW.'
-    )]
+    __slots__ = ('betas', 'eps', 'bias_correction')
+
     eps: Annotated[float, field(
         doc='The epsilon value for this optimizer.',
-        default=1e-6,
+        default=1e-8,
     )]
     betas: Annotated[Optional[tuple[float, float]], field(
-        doc='The betas for AdamW.'
+        doc='The betas for AdamW.',
+        default=(0.9, 0.999),
     )]
-
-    def _coerce_weight_decay(self, spec: Any) -> Optional[OptimizerSchedule]:
-        if spec is None: return None
-        return coerce(OptimizerSchedule, spec)
+    bias_correction: Annotated[bool, field(
+        doc='Whether to use bias correction for Adam.',
+        default=False,
+    )]
 
     def _coerce_betas(self, betas: Any):
         if betas is None: return None
@@ -444,9 +587,25 @@ class AdamWConfig(OptimizerConfig):
         if isinstance(betas, list): return tuple(betas[:2])
         raise ValueError(f'Invalid betas: {betas}')
 
+    algorithm: ClassVar[str] = 'adam'
+    hyperparameter_names = ('eps', 'betas', 'bias_correction')
+
+
+@provides(OptimizerConfig, 'adamw')
+class AdamWConfig(AdamConfig):
+
+    __slots__ = ('weight_decay',)
+
+    weight_decay: Annotated[Optional[OptimizerSchedule], field(
+        doc='The weight decay coefficient for AdamW.'
+    )]
+
+    def _coerce_weight_decay(self, spec: Any) -> Optional[OptimizerSchedule]:
+        if spec is None: return None
+        return coerce(OptimizerSchedule, spec)
+
     algorithm: ClassVar[str] = 'adamw'
-    schedule_names = (*OptimizerConfig.schedule_names, 'weight_decay')
-    hyperparameter_names = ('eps', 'betas')
+    schedule_names = (*AdamConfig.schedule_names, 'weight_decay')
 
 
 
