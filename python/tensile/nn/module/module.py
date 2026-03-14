@@ -80,6 +80,34 @@ def fix_apply_fn(apply_fn: Callable, spread: bool = False, just_value: bool = Fa
         return apply_fn
 
 
+def apply_to_modules(root: Tree,
+                     apply_fn: Callable = None,
+                     spread: bool = False,
+                     just_value: bool = False,
+                     include: PredicateFunction[TreeEntry] = None) -> None:
+    """Apply a function to all the modules in this instance (including this
+    instance).
+
+    Args:
+        apply_fn (Callable): The function to apply to the modules which
+            takes two parameters. The first parameter is the string path of
+            the module (e.g. ``"model.layers.0.linear"``). The second
+            parameter is the module object.
+
+    Returns:
+        The module instance after updating submodules.
+        :param just_pass_module:
+        :param spread:
+        :param apply_fn:
+    """
+    fixed_fn = fix_apply_fn(apply_fn, spread=spread, just_value=just_value)
+    if include is None:
+        tree.apply(root, fixed_fn, traverser=is_module_traverser)
+    else:
+        tree.apply(root, fixed_fn, include=is_module_entry & include)
+
+
+
 module_built = False
 
 
@@ -453,12 +481,7 @@ class Module(Object, tree.TreeNode[ModuleTreeValue]):
             :param spread:
             :param apply_fn:
         """
-        fixed_fn = fix_apply_fn(apply_fn, spread=spread, just_value=just_value)
-        if include is None:
-            tree.apply(self, fixed_fn, traverser=is_module_traverser)
-        else:
-            tree.apply(self, fixed_fn, include=is_module_entry & include)
-        return self
+        return apply_to_modules(self, apply_fn, spread=spread, just_value=just_value, include=include)
 
     def update_modules(self, modules: dict, strict: bool = True) -> Self:
         for a, b in tree.join(self, modules, traverser=is_module_traverser):
