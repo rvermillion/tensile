@@ -96,6 +96,10 @@ class MetaError(RuntimeError):
     pass
 
 
+def show_keywords(kws: Keywords):
+    return ', '.join(f'{k}={v!r}' for k, v in kws.items())
+
+
 class Spec(dict[str, Any]):
 
     def expand(self, *keys: str, **defaults) -> dict[str, Any]:
@@ -128,8 +132,7 @@ class Spec(dict[str, Any]):
                     update(spec)
         return self
 
-    def show_keywords(self):
-        return ', '.join(f'{k}={v!r}' for k, v in self.items())
+    show_keywords = show_keywords
 
     def __repr__(self):
         return 'Spec(' + self.show_keywords() + ')'

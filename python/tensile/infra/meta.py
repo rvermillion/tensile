@@ -397,6 +397,8 @@ class ObjectMeta(Meta):
 
                 if anno_origin is ClassVar:
                     field_spec['scope'] = Scope.class_scope
+                    # If you don't want ClassVar's ignored, you have to set ignore=False explicitly
+                    field_spec['ignore'] = True
                     anno, = get_args(anno)
                     anno_origin = get_origin(anno)
 
@@ -527,6 +529,15 @@ def for_class(cls: type, build: bool = True) -> Meta:
 
 def for_qname(qname: str) -> Optional[Meta]:
     return Meta.for_qname(qname)
+
+
+def get_class(qname: str, carp: bool = True) -> Optional[type]:
+    meta = for_qname(qname)
+    if meta is None:
+        if carp:
+            raise MetaError(f'Cannot find class for {qname}')
+        return None
+    return meta.cls
 
 
 def for_spec(spec: Any, build: bool = False) -> Optional[Meta]:

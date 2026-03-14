@@ -312,6 +312,13 @@ class CollectionFieldType(FieldType):
         return self.cls(new)
 
 
+class FieldSpec(dict[str, Any]):
+
+    __slots__ = ()
+
+    def __repr__(self):
+        return 'field(' + show_keywords(self) + ')'
+
 
 if TYPE_CHECKING:
     # noinspection PyUnusedLocal
@@ -331,7 +338,7 @@ if TYPE_CHECKING:
     ) -> Keywords: ...
 else:
     def field(**kwargs) -> Keywords:
-        return kwargs
+        return FieldSpec(kwargs)
 
 
 # cached_field_types: dict[Any, 'FieldType'] = {}
@@ -1214,7 +1221,8 @@ class Field(RootObject):
             return None
         return name_initter(self.name, self.aliases, writer=self.write,
                             default=self.default,
-                            default_factory=self.default_factory)
+                            default_factory=self.default_factory,
+                            optional=self.type.optional)
 
     def build_delete(self, spec: Spec) -> Optional[Deleter]:
         if isinstance(self.member, property):
