@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import final
 
 from .field import field
+from .load import try_load
 from .meta import ObjectMeta, Spec, UpdateableObject, private_slot
 from .types import Annotated, Any, Callable, ClassVar, Keywords, Mapping, Optional, Self, Sequence, TypeVar
 from .util import process_specs
@@ -133,16 +134,10 @@ class Object(UpdateableObject, metaclass=ObjectClass):
     def load_from(cls, path: Path|str, **kwargs) -> Self:
         if isinstance(path, str):
             path = Path(path)
-        if path.suffix == '.yaml':
-            import yaml
-            spec = yaml.safe_load(path.read_text())
-            return cls.coerce(spec, **kwargs)
-        elif path.suffix == '.json':
-            import json
-            spec = json.loads(path.read_text())
-            return cls.coerce(spec, **kwargs)
-        else:
-            raise ValueError(f'Unsupported file format: {path.suffix}')
+        spec = try_load(path)
+        if spec is None:
+            raise ValueError(f'Could not load from: {path}')
+        return cls.coerce(spec, **kwargs)
 
     @classmethod
     def coerce(cls, spec: Any = None, /, **kwargs) -> Self:
