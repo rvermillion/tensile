@@ -1,5 +1,7 @@
 #  Copyright (c) 2026. Richard Vermillion. All Rights Reserved.
+from pathlib import Path
 
+import torch
 import torch.optim as optim
 
 from tensile.nn.common import *
@@ -8,20 +10,21 @@ from tensile.optim.types import *
 from tensile.optim.optimizer import Optimizer, OptimizerParamGroup, OptimizerStep
 
 
-backend_classes = {
-    'adadelta': optim.Adadelta,
-    'adafactor': optim.Adafactor,
-    'adamax': optim.Adamax,
-    'adam': optim.Adam,
-    'adamw': optim.AdamW,
-    'rmsprop': optim.RMSprop,
-    'sgd': optim.SGD,
-}
+class TorchBackend(Protocol):
+
+    param_groups: list[dict[str, Any]]
+
+    def zero_grad(self, set_to_none: bool = True) -> None: ...
+
+    def step(self, closure: Optional[Callable[[], float]] = None) -> Optional[float]: ...
+
+    def state_dict(self) -> dict[str, Any]: ...
+
+    def load_state_dict(self, state: dict[str, Any]): ...
 
 
-backend_aliases = {
-    'learning_rate': 'lr',
-}
+TorchBackendFactory = Callable[..., TorchBackend]
+
 
 
 @provides(Optimizer, 'torch')
@@ -29,7 +32,7 @@ class TorchOptimizer(Optimizer[Batch]):
 
     __slots__ = ('groups_per_backend',)
 
-    backends: Annotated[list[optim.Optimizer], field(
+    backends: Annotated[list[TorchBackend], field(
         doc='The backends for this optimizer.'
     )]
     groups_per_backend: Annotated[list[list[OptimizerParamGroup]], field(
@@ -39,7 +42,9 @@ class TorchOptimizer(Optimizer[Batch]):
 
     hyperparameter_aliases = {'learning_rate': 'lr'}
 
-    def _lazy_backends(self) -> list[optim.Optimizer]:
+    _step_dtype = ten.int64
+
+    def _lazy_backends(self) -> list[TorchBackend]:
         backends = {}
         for param_group in self.param_groups:
             algo = param_group.config.algorithm
@@ -49,9 +54,9 @@ class TorchOptimizer(Optimizer[Batch]):
                 backends[algo] = [param_group]
         return [self.build_backend(algo, param_groups) for algo, param_groups in backends.items()]
 
-    def build_backend(self, algo: str, param_groups: list[OptimizerParamGroup]) -> optim.Optimizer:
+    def build_backend(self, algo: str, param_groups: list[OptimizerParamGroup]) -> TorchBackend:
         backend_groups = []
-        cls = backend_classes[algo]
+        cls = backend_factories[algo]
         step = self.current_step
         for param_group in param_groups:
             params = param_group.filter_params(self.model)
@@ -60,7 +65,10 @@ class TorchOptimizer(Optimizer[Batch]):
                 **param_group.schedules.get(step, aliases=self.hyperparameter_aliases)
             })
         self.groups_per_backend.append(param_groups)
-        return cls(backend_groups, **self.backend_hyperparameters())
+        if algo == 'native':
+            return cls(params=backend_groups, **self.backend_hyperparameters(), optimizer=self)
+        else:
+            return cls(params=backend_groups, **self.backend_hyperparameters())
 
     def start_step(self, batch: Batch) -> None:
         super().start_step(batch)
@@ -137,6 +145,39 @@ class TorchOptimizer(Optimizer[Batch]):
 
 
         return step
+
+    @staticmethod
+    def _backend_filename(path: Path, b: int) -> Path:
+        return path.with_name(path.stem + f'-{b}').with_suffix('.pt')
+
+    def _load(self, path: Path, **kwargs) -> None:
+        for b, backend in enumerate(self.backends):
+            p = self._backend_filename(path, b)
+            state = torch.load(p, weights_only=False)
+            backend.load_state_dict(state)
+
+    def _save(self, path: Path, **kwargs) -> None:
+        for b, backend in enumerate(self.backends):
+            state = backend.state_dict()
+            p = self._backend_filename(path, b)
+            torch.save(state, p)
+
+
+
+backend_factories: dict[str, TorchBackendFactory] = {
+    'adadelta': optim.Adadelta,
+    'adafactor': optim.Adafactor,
+    'adamax': optim.Adamax,
+    'adam': optim.Adam,
+    'adamw': optim.AdamW,
+    'rmsprop': optim.RMSprop,
+    'sgd': optim.SGD,
+}
+
+
+backend_aliases = {
+    'learning_rate': 'lr',
+}
 
 
 def add_args(opt: dict[str, Any], **kwargs) -> dict[str, Any]:

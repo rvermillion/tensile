@@ -19,17 +19,21 @@ EvalFunction = Callable[[Module, Array], Array]
 LossAndGradFunction = Callable[[Batch], tuple[Array, Tree[Array]]]
 
 
-backend_classes = {
-    'adadelta': optim.AdaDelta,
-    'adafactor': optim.Adafactor,
-    'adamax': optim.Adamax,
-    'adam': optim.Adam,
-    'adamw': optim.AdamW,
-    'lion': optim.Lion,
-    'muon': optim.Muon,
-    'rmsprop': optim.RMSprop,
-    'sgd': optim.SGD,
-}
+class MLXBackend(Protocol):
+
+    @property
+    def state(self) -> Any: ...
+
+    @state.setter
+    def state(self, state: dict) -> None: ...
+
+    def update(self, model: Module, gradients: dict) -> None: ...
+
+    def apply_gradients(self, gradients: dict, parameters: dict) -> Any: ...
+
+
+MLXBackendFactory = Callable[..., MLXBackend]
+
 
 backend_aliases = {}
 
@@ -39,20 +43,23 @@ class MLXOptimizer(Optimizer[Batch]):
 
     __slots__ = ()
 
-    backends: Annotated[list[optim.Optimizer], field(
+    backends: Annotated[list[MLXBackend], field(
         doc='The backend for this optimizer.'
     )]
 
-    def _lazy_backends(self) -> list[optim.Optimizer]:
+    def _lazy_backends(self) -> list[MLXBackend]:
         return [self.build_backend(param_group) for param_group in self.param_groups]
 
-    def build_backend(self, param_group: OptimizerParamGroup) -> optim.Optimizer:
+    def build_backend(self, param_group: OptimizerParamGroup) -> MLXBackend:
         config = param_group.config
         algo = config.algorithm
-        cls = backend_classes[algo]
+        factory = backend_factories[algo]
         aliases = backend_aliases.get(algo, {})
         schedules = config.schedules.alias(include_constant=True, aliases=aliases)
-        return cls(**schedules, **config.backend_hyperparameters(aliases))
+        if algo == 'native':
+            return factory(**schedules, **config.backend_hyperparameters(aliases), optimizer=self)
+        else:
+            return factory(**schedules, **config.backend_hyperparameters(aliases))
 
     def loss_and_grad_fn(self, model: Module, train_fn: TrainFunction[Batch]) -> LossAndGradFunction[Batch]:
 
@@ -85,7 +92,7 @@ class MLXOptimizer(Optimizer[Batch]):
         model = self.model
         loss_and_grad_fn: LossAndGradFunction[Batch] = self.loss_and_grad_fn(model, train_fn)
 
-        optimizers: list[optim.Optimizer] = self.backends
+        optimizers: list[MLXBackend] = self.backends
 
         if len(optimizers) == 1:
             optimizer = optimizers[0]
@@ -149,16 +156,30 @@ class MLXOptimizer(Optimizer[Batch]):
         for backend in self.backends:
             backend.state['step'] = self.current_step
 
-    def load(self, path: str | Path, **kwargs) -> None:
+    def _load(self, path: Path, **kwargs) -> None:
         for b, backend in enumerate(self.backends):
             p = path.with_name(path.stem + f'-{b}').with_suffix('.safetensors')
             flat = ten.load_tensors(p)
             state = tree.unflatten(flat.items())
             backend.state = state
 
-    def save(self, path: Path, **kwargs) -> None:
+    def _save(self, path: Path, **kwargs) -> None:
         for b, backend in enumerate(self.backends):
             state = tree.flatdict(backend.state)
             p = path.with_name(path.stem + f'-{b}').with_suffix('.safetensors')
             ten.save_tensors(p, state)
+
+
+
+backend_factories: dict[str, MLXBackendFactory] = {
+    'adadelta': optim.AdaDelta,
+    'adafactor': optim.Adafactor,
+    'adamax': optim.Adamax,
+    'adam': optim.Adam,
+    'adamw': optim.AdamW,
+    'lion': optim.Lion,
+    'muon': optim.Muon,
+    'rmsprop': optim.RMSprop,
+    'sgd': optim.SGD,
+}
 
