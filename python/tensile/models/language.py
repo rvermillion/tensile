@@ -1,7 +1,7 @@
 #  Copyright (c) 2026. Richard Vermillion. All Rights Reserved.
 
 from ..nn.module import *
-from ..nn.lm import LM, LMArgs
+from ..nn.layers.lm import LM, LMArgs
 from ..infra import field, meta, provides
 from ..infra.types import *
 from ..shims import Array

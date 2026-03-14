@@ -261,6 +261,14 @@ class Module(Object, tree.TreeNode[ModuleTreeValue]):
         doc='Keys of child nodes to freeze during initialization',
     )]] = None
 
+    def _coerce_args(self, spec: Any) -> ModuleArgs:
+        if isinstance(spec, self.Args): return spec
+        if isinstance(spec, ModuleArgs):
+            return self.Args.from_args(spec)
+        if isinstance(spec, dict):
+            return self.Args.from_dict(spec)
+        raise TypeError(f'Invalid args type: {type(spec).__name__}')
+
     def set_lifecycle(self, lifecycle: Object.Lifecycle):
         self._lifecycle = lifecycle
 

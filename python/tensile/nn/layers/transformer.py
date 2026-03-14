@@ -135,7 +135,7 @@ class DecoderLayer(CompiledModule):
 
 
 meta.for_class(DecoderLayer).configure_registry(
-    modules='patchlm.models',
+    modules='tensile.models',
     append_kind=True,
     default_kind='transformer'
 )

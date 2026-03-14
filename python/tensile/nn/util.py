@@ -1,11 +1,5 @@
 #  Copyright (c) 2025-2026. Richard Vermillion. All Rights Reserved.
 
-# from mlx.core.fast import scaled_dot_product_attention as fast_sdp_attention
-
-# from mlx_lm.models.base import BaseModelArgs
-
-# from .. import nn
-# from ..array import ann
 from .common import Array, DType, ten, TYPE_CHECKING
 from .layers.linear import Linear
 

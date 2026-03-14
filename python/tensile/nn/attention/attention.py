@@ -244,7 +244,7 @@ class StandardAttention(Attention):
 
             extra = score_extra(x)
 
-            if ctx := tensile.nn.lm.LanguageModelContext.get_current():
+            if ctx := tensile.nn.lm.LMContext.get_current():
                 cache = ctx.layer_cache
                 masker = ctx.get_masker(L, dtype=queries.dtype)
             else:

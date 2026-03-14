@@ -2,15 +2,17 @@
 
 # import patchlm.cache
 
-from .common import *
-from .module import ForwardContext, Module, CompiledModule
-from ..nn.layers import DecoderLayer, Embedding, Normalization
-from ..nn.attention.mask import AttentionMasker, create_causal_mask, make_additive_masker
-from .cache import ModelCache, KVCache
-from .quantization import QuantizableModuleArgs
+from ..common import *
+from ..module import ForwardContext, Module, CompiledModule
+from ...nn.attention.mask import AttentionMasker, create_causal_mask, make_additive_masker
+from ..cache import ModelCache, KVCache
+from ..quantization import QuantizableModuleArgs
+from .embedding import Embedding
+from .normalization import Normalization
+from .transformer import DecoderLayer
 
 
-class LanguageModelArgs(QuantizableModuleArgs):
+class LMArgs(QuantizableModuleArgs):
     model_type: Annotated[str, 'Model type identifier']
     hidden_size: int
     vocab_size: int
@@ -23,7 +25,8 @@ class LanguageModelArgs(QuantizableModuleArgs):
     _config_default_step = 'model'
 
 
-class LanguageModelContext(ForwardContext):
+@provides(ForwardContext, 'lm')
+class LMContext(ForwardContext):
 
     __slots__ = ('mask', 'cache', 'layer_cache', 'call')
 
@@ -55,12 +58,12 @@ class LanguageModelContext(ForwardContext):
 
 
 @provides(Module, "lm")
-class LanguageModel(CompiledModule):
+class LM(CompiledModule):
 
     __slots__ = ('embed_tokens', 'layers', 'norm', 'vocab_size',
                  'num_hidden_layers', 'hidden_size')
 
-    args: Annotated[LanguageModelArgs, field(ignore=True)]
+    args: Annotated[LMArgs, field(ignore=True)]
 
     vocab_size: int
     num_hidden_layers: int
@@ -70,7 +73,7 @@ class LanguageModel(CompiledModule):
     layers: list[DecoderLayer]
     norm: Module
 
-    def init_from_args(self, args: LanguageModelArgs):
+    def init_from_args(self, args: LMArgs):
         super().init_from_args(args)
 
         self.vocab_size = args.vocab_size
@@ -84,24 +87,24 @@ class LanguageModel(CompiledModule):
         self.layers = self.build_layers(args)
         self.norm = self.build_norm(args)
 
-    def build_embed_tokens(self, args: LanguageModelArgs) -> Module:
+    def build_embed_tokens(self, args: LMArgs) -> Module:
         embedding_args = args.embedding.set_defaults(
             num_embeddings=self.vocab_size,
             output_dim=self.hidden_size,
         )
         return Embedding.from_args(embedding_args)
 
-    def build_layers(self, args: LanguageModelArgs) -> list[DecoderLayer]:
+    def build_layers(self, args: LMArgs) -> list[DecoderLayer]:
         return [
             self.build_layer(args, l) for l in range(self.num_hidden_layers)
         ]
 
     # noinspection PyMethodMayBeStatic
-    def build_layer(self, args: LanguageModelArgs, l: int) -> DecoderLayer:
+    def build_layer(self, args: LMArgs, l: int) -> DecoderLayer:
         layer_args = args.layers[l]
         return DecoderLayer.from_args(layer_args)
 
-    def build_norm(self, args: LanguageModelArgs) -> Module:
+    def build_norm(self, args: LMArgs) -> Module:
         norm_args = args.norm.set_defaults(
             dims=self.hidden_size,
             kind='rms',
@@ -118,14 +121,14 @@ class LanguageModel(CompiledModule):
             ten.debug_eval(inputs)
             h = self.embed_tokens(inputs)
 
-            if ctx := LanguageModelContext.get_current():
+            if ctx := LMContext.get_current():
                 cache = ctx.cache
 
                 if cache is None:
                     cache = ctx.cache = self.build_cache()
 
             else:
-                ctx = LanguageModelContext(model=self)
+                ctx = LMContext(model=self)
                 cache = None
 
             with ctx.push():
@@ -153,17 +156,17 @@ class LanguageModel(CompiledModule):
     def out_dim(self) -> int:
         return self.hidden_size
 
-    ForwardContext = LanguageModelContext
+    ForwardContext = LMContext
 
 
-meta.for_class(LanguageModel).configure_registry(
-    modules='patchlm.models',
+meta.for_class(LM).configure_registry(
+    modules='tensile.models',
     append_kind=True,
 )
 
 
-@meta.provides(LanguageModel, 'standard')
-class StandardLanguageModel(LanguageModel):
+@meta.provides(LM, 'standard')
+class StandardLanguageModel(LM):
 
     pass
     # kind = 'standard'

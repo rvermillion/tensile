@@ -89,7 +89,7 @@ class ModelCache(Object, Storable):
 
     __slots__ = ('model', 'layers', 'position', 'tokens', 'mask', 'square_causal_mask')
 
-    model: Annotated['tensile.nn.lm.LanguageModel', field(
+    model: Annotated['tensile.nn.lm.LM', field(
         doc="The model for which this cache is used."
     )]
     layers: Annotated[list[Optional[KVCache]], field(
@@ -109,25 +109,6 @@ class ModelCache(Object, Storable):
         doc="Whether to use a square causal mask for attention.",
         default=True,
     )]
-
-    # def __init__(self, model: 'patchlm.nn.lm.LanguageModel', layers: Iterable[Optional[KVCache]] = None, **kwargs):
-    #     if layers is None:
-    #         layers = [None] * len(model.layers)
-    #     else:
-    #         layers = list(layers)
-    #
-    #     super().__init__(**kwargs)
-    #     self.model = model
-    #     self.layers = layers
-    #     self.position = 0
-    #     self.tokens = ArrayBuffer()
-    #     self.mask = None
-    #     self.square_causal_mask = True
-    #     # cache = layers[0]
-    #     # if isinstance(cache, SegmentedKVCache):
-    #     #     self.square_causal_mask = True
-    #     # else:
-    #     #     self.square_causal_mask = False
 
     def _lazy_tokens(self) -> ArrayBuffer:
         return ArrayBuffer()
