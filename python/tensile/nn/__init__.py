@@ -27,3 +27,4 @@ else:
 from . import module, activations, lm, losses, quantization
 
 from .module import CompiledModule, Module, ModuleArgs
+from .patch import Patch
