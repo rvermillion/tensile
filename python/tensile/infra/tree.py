@@ -774,7 +774,7 @@ def flatdict(
 
 
 # noinspection PyShadowingNames
-def unflatten(tree: list[tuple[str, T]]) -> Tree[T]:
+def unflatten(tree: Iterable[tuple[str, T]]) -> Tree[T]:
     """Recreate a Python tree from its flat representation.
 
     .. code-block:: python
@@ -792,33 +792,47 @@ def unflatten(tree: list[tuple[str, T]]) -> Tree[T]:
     Returns:
         A Python tree.
     """
-    if len(tree) == 1 and tree[0][0] == "":
-        return tree[0][1]
+    tree_iter = iter(tree)
 
     try:
-        int(tree[0][0].split(".", maxsplit=1)[0])
+        first_key, first_value = next(tree_iter)
+    except StopIteration:
+        return {}
+
+    if first_key == "":
+        return first_value
+
+    try:
+        int(first_key.split(".", maxsplit=1)[0])
         is_list = True
     except ValueError:
         is_list = False
 
     # collect children
     children = defaultdict(list)
-    for key, value in tree:
+
+    current_idx, *next_idx = first_key.split(".", maxsplit=1)
+    next_idx = "" if not next_idx else next_idx[0]
+    children[current_idx].append((next_idx, first_value))
+
+    for key, value in tree_iter:
         current_idx, *next_idx = key.split(".", maxsplit=1)
         next_idx = "" if not next_idx else next_idx[0]
         children[current_idx].append((next_idx, value))
 
-    # recursively map them to the original container
-    if is_list:
-        keys = sorted((int(idx), idx) for idx in children.keys())
-        l = []
-        for i, k in keys:
-            # if i <= len(l), no {} will be appended.
-            l.extend([{} for _ in range(i - len(l))])
-            l.append(unflatten(children[k]))
-        return l
-    else:
-        return {k: unflatten(v) for k, v in children.items()}
+    if children:
+        # recursively map them to the original container
+        if is_list:
+            keys = sorted((int(idx), idx) for idx in children.keys())
+            l = []
+            for i, k in keys:
+                # if i <= len(l), no {} will be appended.
+                l.extend([{} for _ in range(i - len(l))])
+                l.append(unflatten(children[k]))
+            return l
+        else:
+            return {k: unflatten(v) for k, v in children.items()}
+    return first_value
 
 
 def reduce(fn, tree, *,
