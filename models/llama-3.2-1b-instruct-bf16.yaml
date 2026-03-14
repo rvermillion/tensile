@@ -1,0 +1,45 @@
+name: llama-3.2-1b-instruct-bf16
+kind: default
+repo: hf:mlx-community/llama-3.2-1b-instruct-bf16
+dtype: bfloat16
+model:
+  vocab_size: 128256
+  hidden_size: 2048
+  layers:
+    count: 16
+    _:
+      kind: transformer
+      input_layernorm:
+        kind: rms
+        eps: 1e-05
+      attention:
+        kind: standard
+        num_attention_heads: 32
+        num_key_value_heads: 8
+        bias: false
+        position_encoder:
+          kind: rope.llama3
+          traditional: false
+          base: 500000.0
+          max_positions: 131072
+          scaling:
+            factor: 32.0
+            high_freq_factor: 4.0
+            low_freq_factor: 1.0
+            original_max_positions: 8192
+      mlp:
+        kind: glu
+        activation: silu
+        bias: false
+        hidden_dim: 8192
+      post_attention_layernorm:
+        kind: rms
+        eps: 1e-05
+  norm:
+    kind: rms
+    eps: 1e-05
+lm_head: null  # this makes it tie embeddings
+cache:
+  kind: default
+  max_window_layers: 28
+  use_sliding_window: false
