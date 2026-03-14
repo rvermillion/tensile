@@ -1,6 +1,6 @@
 # tensile
 
-A dual-backend tensor framework for writing ML code once and running it on both [MLX](https://github.com/ml-explore/mlx) and [PyTorch](https://pytorch.org/) — including training loops, not just inference.
+A dual-backend tensor framework for writing ML code once and running it on both [MLX](https://github.com/ml-explore/mlx) and [PyTorch](https://pytorch.org/) — including training loops, not just inference. The tensile.nn package also has its own `Module` system that supports declarative model building, patching, and instrumentation. Many common layers are implemented using this Module framework in `tensile.nn.layers`.
 
 ## What is this?
 
@@ -60,13 +60,131 @@ The `stepper` pattern composes cleanly with hooks for gradient handling, step-st
 
 ## Data-driven configuration
 
-Tensile uses a provider/registry pattern where concrete implementations register themselves by kind. Model architectures, optimizers, schedulers, and other components can be instantiated from YAML or dictionary configs without your code needing to know the specific implementation class:
+Tensile uses a provider/registry pattern where concrete implementations register themselves by **kind**. Model architectures, optimizers, schedulers, and other components can be instantiated from YAML or dictionary configs without your code needing to know the specific implementation class. For example, to create a model you can simply call `Model.coerce` with the dictionary read from a YAML file:
 
 ```python
-optimizer = Optimizer.coerce({"config": { "kind": "adamw", "lr": 1e-4, "weight_decay": 0.01}})
+from tensile.models import Model
+
+model = Model.coerce(yaml.safe_load(model_filename))
+```
+
+To create a model with the architecture to run `qwen2.5-7b-instruct-8bit`, you can use the following YAML:
+
+```yaml
+kind: language
+model:
+  vocab_size: 152064
+  hidden_size: 3584
+  layers:
+    count: 28
+    _:
+      kind: transformer
+      input_layernorm:
+        kind: rms
+        eps: 1e-06
+      attention:
+        kind: standard
+        num_attention_heads: 28
+        num_key_value_heads: 4
+        bias: true
+        o_proj:
+          bias: false
+        position_encoder:
+          kind: rope
+          traditional: false
+          max_positions: 32768
+          base: 1000000.0
+      mlp:
+        kind: glu
+        activation: silu
+        bias: false
+        hidden_dim: 18944
+      post_attention_layernorm:
+        kind: rms
+        eps: 1e-06
+  norm:
+    kind: rms
+    eps: 1e-06
+lm_head:
+  kind: linear
+  bias: false
+```
+
+There is no need to write boilerplate code for each model type. The model is constructed with the write architecture based on the config.  For a Llama 3 model, you would change the parameters, including the position_encoder to be:
+
+```yaml
+        position_encoder:
+          kind: rope.llama3
+          traditional: false
+          base: 500000.0
+          max_positions: 131072
+          scaling:
+            factor: 32.0
+            high_freq_factor: 4.0
+            low_freq_factor: 1.0
+            original_max_positions: 8192
+```
+
+And that's it, no re-implementing every part of the model to make sure that the right RoPE implementation is used.
+
+The same pattern works for optimizers:
+
+```python
+from tensile.optim import Optimizer
+
+optimizer = Optimizer.coerce({
+    "config": {
+        "kind": "adamw",
+        "lr": 1e-4,
+        "weight_decay": 0.01
+    }
+})
 ```
 
 This makes experiment configuration declarative and keeps implementation details out of your training scripts.
+
+## Instruments
+
+The tensile `Module` system also supports first class instrumentation. You can add an instrument to any model and it has a chance to wrap the call to the model without changing the model's tree structure.  An instrument can grab activations for logging or even run inner optimization loops during a forward pass (see `tensile.extra.instrument.head_precondition` for an example). Instruments are easy to write (just extend the `Instrument` class and implement one method) and are easy to add, remove, and compose.
+
+## Patches
+
+The tensile `Module` system also supports patching models, which let's use change the structure or algorithm and add instrumentation declaratively.  You can declare patches in YAML files, just like everything else:
+
+```yaml
+patches:
+  # Replaces every module in the tree that matches the path `**.attend` with an implementation of 
+  # the `Attend` interface that has kind `sink`.
+  add_sink_attend:
+    replace-module:
+      interface: tensile.nn.attention.attend.Attend
+      spec:
+        kind: sink
+      where:
+        tree.path: '**.attend'
+  # Freezes every module in the tree that matches the path `model.layers.*` and whose step 
+  # matches the lambda function (meaning only odd layers are frozen)
+  freeze_odd_layers:
+    freeze-module:
+      where:
+        - tree.path: model.layers.*
+        - tree.step:
+            lambda: x % 2 == 1
+  # Adds an instrument to every module in the tree that matches the path `**.q_proj` that 
+  # logs the activations of that projection layer every 5 batches.
+  add_q_proj_logging:
+    add-instrument:
+      instrument:
+        kind: log-activation
+        schedule:
+          kind: every
+          attr: batch
+          n: 5
+      where:
+        tree.path: '**.q_proj'
+```
+
+There is a complete composible predicate system that lets you pick which modules to apply patches to. And you can write you own patches to do whatever you want (just register them as a new patch kind).
 
 ## What else is in here
 
