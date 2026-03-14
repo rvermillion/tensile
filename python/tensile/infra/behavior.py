@@ -248,32 +248,41 @@ def transform_coercer(transform: TransformFunction[Any, Y], desc: str = '') -> C
 def name_initter(name: str, aliases: tuple[str, ...] = None, /, writer: Setter = None,
                  default: Any = None,
                  default_factory: Callable[[], Any] = None,
-                 required: bool = False) -> Initter[Any]:
+                 required: bool = False,
+                 optional: bool = False) -> Initter[Any]:
     if writer is None:
         writer = attr_setter(name)
+
+    if optional:
+        def is_unset(value: Any) -> bool:
+            return value is missing
+    else:
+        def is_unset(value: Any) -> bool:
+            return value is missing or value is None
 
     if aliases:
         if required:
             def init(this: Any, spec: Spec):
                 value = spec.get(name, missing)
 
-                if value is missing:
+                if is_unset(value):
                     for alias in aliases:
                         value = spec.get(alias, missing)
-                        if value is not missing:
+                        if not is_unset(value):
                             break
                     else:
                         raise ValueError(f'{name} (or {", ".join(aliases)}) is required!')
 
                 writer(this, value)
         elif default_factory is not None:
+
             def init(this: Any, spec: Spec):
                 value = spec.get(name, missing)
 
-                if value is missing:
+                if is_unset(value):
                     for alias in aliases:
                         value = spec.get(alias, missing)
-                        if value is not missing:
+                        if not is_unset(value):
                             break
                     else:
                         value = default_factory()
@@ -283,10 +292,10 @@ def name_initter(name: str, aliases: tuple[str, ...] = None, /, writer: Setter =
             def init(this: Any, spec: Spec):
                 value = spec.get(name, missing)
 
-                if value is missing:
+                if is_unset(value):
                     for alias in aliases:
                         value = spec.get(alias, missing)
-                        if value is not missing:
+                        if not is_unset(value):
                             break
                     else:
                         value = default
@@ -303,19 +312,19 @@ def name_initter(name: str, aliases: tuple[str, ...] = None, /, writer: Setter =
             def init(this: Any, spec: Spec):
                 value = spec.get(name, missing)
                 try:
-                    if value is missing: value = default_factory()
+                    if is_unset(value): value = default_factory()
                     writer(this, value)
                 except Exception as e:
                     raise AttributeError(f'Error initializing field [{name}] with: {value}') from e
         else:
             def init(this: Any, spec: Spec):
-                value = spec.get(name, default)
+                value = spec.get(name, missing)
                 try:
-                    writer(this, value)
+                    writer(this, default if is_unset(value) else value)
                 except Exception as e:
                     raise AttributeError(f'Error initializing field [{name}] with: {value}') from e
 
-    return name_function(init, f'dynamic_init[{name}]')
+    return name_function(init, f'_init_{name}')
 
 
 coerce_str: Coercer[Any, str]
