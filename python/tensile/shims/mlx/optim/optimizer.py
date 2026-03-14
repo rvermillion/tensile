@@ -1,4 +1,5 @@
 #  Copyright (c) 2026. Richard Vermillion. All Rights Reserved.
+from pathlib import Path
 
 import mlx.core as mx
 import mlx.optimizers as optim
@@ -142,4 +143,22 @@ class MLXOptimizer(Optimizer[Batch]):
             return loss
 
         return step
+
+    def set_current_step(self, step: Array) -> None:
+        super().set_current_step(step)
+        for backend in self.backends:
+            backend.state['step'] = self.current_step
+
+    def load(self, path: str | Path, **kwargs) -> None:
+        for b, backend in enumerate(self.backends):
+            p = path.with_name(path.stem + f'-{b}').with_suffix('.safetensors')
+            flat = ten.load_tensors(p)
+            state = tree.unflatten(flat.items())
+            backend.state = state
+
+    def save(self, path: Path, **kwargs) -> None:
+        for b, backend in enumerate(self.backends):
+            state = tree.flatdict(backend.state)
+            p = path.with_name(path.stem + f'-{b}').with_suffix('.safetensors')
+            ten.save_tensors(p, state)
 
