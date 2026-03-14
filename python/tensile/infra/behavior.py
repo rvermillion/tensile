@@ -411,7 +411,7 @@ def coerce_conditional(coerce: Coercer[X, Y], condition: Callable[[Any], bool], 
 
 def meta_coercer(meta: 'infra.Meta', this_arg: str = None) -> Coercer:
 
-    log.warn('Using meta {} coerce for automatic coercion', meta)
+    log.debug('Using meta {} coerce for automatic coercion', meta)
 
     if this_arg is None:
         # noinspection PyUnusedLocal
