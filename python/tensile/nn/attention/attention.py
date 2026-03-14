@@ -1,6 +1,6 @@
 #  Copyright (c) 2025-2026. Richard Vermillion. All Rights Reserved.
 
-import tensile.nn
+import tensile.nn.layers
 
 from ..common import *
 from ..layers.linear import LinearArgs
@@ -244,7 +244,7 @@ class StandardAttention(Attention):
 
             extra = score_extra(x)
 
-            if ctx := tensile.nn.lm.LMContext.get_current():
+            if ctx := tensile.nn.layers.lm.LMContext.get_current():
                 cache = ctx.layer_cache
                 masker = ctx.get_masker(L, dtype=queries.dtype)
             else:
