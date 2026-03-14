@@ -334,7 +334,6 @@ class Optimizer(Object, Generic[Batch]):
     )]
     current_step: Annotated[Array, field(
         doc='The current step of the optimizer.',
-        default_factory=lambda: ten.array(0, dtype=ten.uint64)
     )]
     param_groups: Annotated[list[OptimizerParamGroup], field(
         doc='The parameter groups for this optimizer.',
@@ -388,13 +387,18 @@ class Optimizer(Object, Generic[Batch]):
                 all_params[name] = self.build_param_info(name, param_group)
         return all_params
 
+    _step_dtype: ClassVar[Annotated[ten.DType, field(ignore=True)]] = ten.uint64
+
+    def _lazy_current_step(self) -> Array:
+        return ten.array(0, dtype=self._step_dtype)
+
     def _coerce_current_step(self, spec: Any) -> Array:
         if spec is None:
-            return ten.array(0, dtype=ten.uint64)
+            return ten.array(0, dtype=self._step_dtype)
         elif isinstance(spec, Array):
-            return spec
+            return ten.as_type(spec, self._step_dtype)
         elif isinstance(spec, int):
-            return ten.array(spec, dtype=ten.int64)
+            return ten.array(spec, dtype=self._step_dtype)
         else:
             raise TypeError(f'Invalid current_step specification: {spec}')
 
@@ -463,12 +467,22 @@ class Optimizer(Object, Generic[Batch]):
         if step_handler := self.step_handler:
             step_handler.on_start(self, batch)
 
-    def save(self, path: str|Path, **kwargs) -> None:
-        """Save the optimizer state to a file."""
-        raise NotImplementedError()
-
     def load(self, path: str|Path, **kwargs) -> None:
         """Load the optimizer state from a file."""
+        if isinstance(path, str): path = Path(path)
+        return self._load(path, **kwargs)
+
+    def _load(self, path: Path, **kwargs) -> None:
+        """Load the optimizer state from a file."""
+        raise NotImplementedError()
+
+    def save(self, path: str|Path, **kwargs) -> None:
+        """Save the optimizer state to a file."""
+        if isinstance(path, str): path = Path(path)
+        return self._save(path, **kwargs)
+
+    def _save(self, path: str|Path, **kwargs) -> None:
+        """Save the optimizer state to a file."""
         raise NotImplementedError()
 
     def get_hyperparameters(self, group: int = None) -> dict[str, Any]:
@@ -532,6 +546,10 @@ class Optimizer(Object, Generic[Batch]):
     def _coerce_from_mapping(cls, spec: Mapping[str, Any], /, **kwargs):
         if 'kind' not in spec and 'kind' not in kwargs:
             kwargs['kind'] = ten.ten_kind
+        else:
+            kind = kwargs.get('kind', spec.get('kind'))
+            if kind == 'native':
+                kwargs['kind'] = 'native.' + ten.ten_kind
         return super()._coerce_from_mapping(spec, **kwargs)
 
 
