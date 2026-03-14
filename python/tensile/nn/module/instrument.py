@@ -39,6 +39,9 @@ class Instrument(Object):
     def _eq_tuple(self) -> tuple:
         return self.__class__, self.wrap_call
 
+    def __contains__(self, item):
+        return item == self
+
     def __add__(self, other) -> 'Instrument':
         if other is None: return self
         return Instrument.compose(self, Instrument.coerce(other))
@@ -128,3 +131,7 @@ class CompositeInstrument(Instrument):
 
     def _eq_tuple(self) -> tuple:
         return self.instruments
+
+    def __contains__(self, item):
+        return item == self or any(item in inst for inst in self.instruments)
+
