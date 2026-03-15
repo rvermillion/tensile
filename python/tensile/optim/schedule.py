@@ -213,18 +213,18 @@ class WarmupSchedule(BaseSchedule):
 class WarmupLRSchedule(BaseSchedule):
 
     warmup_steps: Annotated[Array, field()]
-    base_lr: Annotated[Array, field(default_factory=constant_array_factory(1e-3))]
+    base: Annotated[Array, field(default_factory=constant_array_factory(1e-3))]
 
     def _coerce_warmup_steps(self, warmup_steps) -> Array:
         return ten.array(warmup_steps)
 
-    def _coerce_base_lr(self, base_lr) -> Array:
-        return ten.array(base_lr)
+    def _coerce_base(self, base) -> Array:
+        return ten.array(base)
 
     def value_for_step(self, step: Array) -> Array:
         # ten.debug_eval(step)
 
-        warmup_lr = self.base_lr * step / self.warmup_steps
+        warmup_lr = self.base * step / self.warmup_steps
         after_warmup_lr = self.lr_after_warmup(step)
 
         lr = ten.where(step < self.warmup_steps, warmup_lr, after_warmup_lr)
@@ -232,15 +232,15 @@ class WarmupLRSchedule(BaseSchedule):
         return lr
 
     def lr_after_warmup(self, step: Array) -> Array:
-        return self.base_lr
+        return self.base
 
     def _repr_args(self, **options) -> str:
-        return f'warmup={self.warmup_steps}, base_lr={self.base_lr}'
+        return f'warmup={self.warmup_steps}, base={self.base}'
 
     def report_message(self, step, lr) -> str:
         return (
             '  - set learning rate at step {step} to {lr:.9f} (base {base:.9f}, warmup {warmup})'.format(
-                step=step, lr=lr, base=self.base_lr, warmup=self.warmup_steps
+                step=step, lr=lr, base=self.base, warmup=self.warmup_steps
             )
         )
 
@@ -249,7 +249,7 @@ class WarmupLRSchedule(BaseSchedule):
 class CosineLRSchedule(WarmupLRSchedule):
 
     total_steps: Annotated[Array, field(default_factory=zero)]
-    min_lr: Annotated[Array, field(default_factory=constant_array_factory(1e-5))]
+    min: Annotated[Array, field(default_factory=constant_array_factory(1e-5))]
 
     # def __init__(self, total_steps: int, min_lr: float = 1e-5, **kwargs):
     #     super().__init__(**kwargs)
@@ -259,17 +259,17 @@ class CosineLRSchedule(WarmupLRSchedule):
     def _coerce_total_steps(self, total_steps) -> Array:
         return ten.array(total_steps)
 
-    def _coerce_min_lr(self, min_lr) -> Array:
+    def _coerce_min(self, min_lr) -> Array:
         return ten.array(min_lr)
 
     def lr_after_warmup(self, step) -> Array:
         progress = (step - self.warmup_steps) / ten.maximum(1, self.total_steps - self.warmup_steps)
         cosine = 0.5 * (1 + ten.cos(ten.pi * progress))
-        lr = self.min_lr + (self.base_lr - self.min_lr) * cosine
+        lr = self.min + (self.base - self.min) * cosine
         return lr
 
     def _repr_args(self, **options) -> str:
-        return super()._repr_args(**options) + f', total={self.total_steps}, min_lr={self.min_lr}'
+        return super()._repr_args(**options) + f', total={self.total_steps}, min={self.min}'
 
 
 P = ParamSpec('P')
