@@ -116,7 +116,7 @@ lm_head:
   bias: false
 ```
 
-There is no need to write boilerplate code for each model type. The model is constructed with the write architecture based on the config.  For a Llama 3 model, you would change the parameters, including the position_encoder to be:
+There is no need to write boilerplate code for each model type. The model is constructed with the right architecture based on the config.  For a Llama 3 model, you would change the parameters, including the position_encoder to be:
 
 ```yaml
         position_encoder:
@@ -159,7 +159,7 @@ optimizer = Optimizer.coerce({
                 "kind": "cosine",
                 "warmup_steps": 3_000,
                 "total_steps": 200_000,
-                "baser": 1.5e-3,
+                "base": 1.5e-3,
                 "min": 1.e-5,
             },
             "betas": [0.9, 0.95],
