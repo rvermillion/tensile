@@ -35,6 +35,10 @@ class DecoderLayerArgs(ModuleArgs):
         doc="The post-attention normalization layer of the decoder layer",
         aliases=['layernorm'],
     )]
+    post_mlp_layernorm: Annotated[Normalization.Args, field(
+        doc="The post-attention normalization layer of the decoder layer",
+        aliases=['layernorm'],
+    )]
     # mlp_bias: bool = False
     # rope_theta: float = 10000
     # rope_traditional: bool = False
@@ -43,8 +47,8 @@ class DecoderLayerArgs(ModuleArgs):
 
 class DecoderLayer(CompiledModule):
 
-    __slots__ = ('hidden_size', 'self_attn', 'mlp', 'input_layernorm',
-                 'post_attention_layernorm')
+    __slots__ = ('hidden_size', 'attention', 'mlp', 'input_layernorm',
+                 'post_attention_layernorm', 'post_mlp_layernorm',)
 
     # num_attention_heads: Annotated[int, field(
     #     doc="The number of attention heads in the layer",
@@ -52,8 +56,8 @@ class DecoderLayer(CompiledModule):
     hidden_size: Annotated[int, field(
         doc="The hidden size of the layer",
     )]
-    self_attn: Annotated[Attention, field(
-        doc="The self-attention module of the decoder layer",
+    attention: Annotated[Attention, field(
+        doc="The attention module of the decoder layer",
         changed=CompiledModule.recompile,
     )]
     mlp: Annotated[MLP, field(
@@ -68,6 +72,10 @@ class DecoderLayer(CompiledModule):
         doc="The post-attention layer normalization module of the decoder layer",
         changed=CompiledModule.recompile,
     )]
+    post_mlp_layernorm: Annotated[Optional[Module], field(
+        doc="The post-attention layer normalization module of the decoder layer",
+        changed=CompiledModule.recompile,
+    )]
 
     def init_from_args(self, args: DecoderLayerArgs):
         super().init_from_args(args)
@@ -78,10 +86,11 @@ class DecoderLayer(CompiledModule):
         # self.num_attention_heads = num_attention_heads
         self.hidden_size = hidden_size
 
-        self.self_attn = self.build_self_attn(args)
+        self.attention = self.build_attention(args)
         self.mlp = self.build_mlp(args)
         self.input_layernorm = self.build_input_layernorm(args)
         self.post_attention_layernorm = self.build_post_attention_layernorm(args)
+        self.post_mlp_layernorm = self.build_post_mlp_layernorm(args)
 
     @property
     def in_dim(self) -> int:
@@ -95,7 +104,7 @@ class DecoderLayer(CompiledModule):
     def num_attention_heads(self) -> int:
         return self.self_attn.n_heads
 
-    def build_self_attn(self, args: DecoderLayerArgs) -> Attention:
+    def build_attention(self, args: DecoderLayerArgs) -> Attention:
         return Attention.from_args(args.attention)
 
     def build_mlp(self, args: DecoderLayerArgs) -> MLP:
@@ -119,17 +128,17 @@ class DecoderLayer(CompiledModule):
         )
         return Normalization.from_args(norm_args)
 
-    # def build_layernorm(self, args: DecoderLayerArgs) -> Module:
-    #     norm_args = args.layernorm.set_defaults(
-    #         dims=self.hidden_size,
-    #         eps=args.rms_norm_eps,
-    #         kind='rms',
-    #     )
-    #     return Normalization.from_args(norm_args)
+    def build_post_mlp_layernorm(self, args: DecoderLayerArgs) -> Optional[Module]:
+        # norm_args = args.post_mlp_layernorm.set_defaults(
+        #     dims=self.hidden_size,
+        #     kind='rms',
+        # )
+        # return Normalization.from_args(norm_args)
+        return None
 
-    def nilpotent(self, scale: float = None, precision: DType = None):
-        self.self_attn.nilpotent()
-        self.mlp.nilpotent()
+    default_weight_aliases = {
+        'self_attn': 'attention',
+    }
 
     Args = DecoderLayerArgs
 
@@ -141,6 +150,7 @@ meta.for_class(DecoderLayer).configure_registry(
 )
 
 
+@meta.provides(Module, 'transformer-block')
 @meta.provides(DecoderLayer, 'transformer')
 class TransformerBlock(DecoderLayer):
 
@@ -148,53 +158,30 @@ class TransformerBlock(DecoderLayer):
 
     def build_call(self, train: bool = False, **options) -> Callable:
         input_layernorm = self.input_layernorm
-        self_attn = self.self_attn
+        attention = self.attention
         post_attention_layernorm = self.post_attention_layernorm
+        post_mlp_layernorm = self.post_mlp_layernorm
         mlp = self.mlp
 
-        if train:
-            if dropout := self.args.dropout:
-                if 'self_attn' in dropout:
-                    self_attn = Dropout.dropout(self_attn, p=dropout['self_attn'])
-                if 'mlp' in dropout:
-                    mlp = Dropout.dropout(mlp, p=dropout['mlp'])
-
-        def call(x: Array) -> Array:
-            """
-            Processes the input tensor `x` through a series of transformations including
-            layer normalization, self-attention, and a multi-layer perceptron (MLP). The
-            function performs residual connections after both the self-attention and MLP
-            operations.
-
-            :param x: Input tensor to be processed. (B, L, D)
-            :type x: Array
-            :return: Processed tensor after applying layer normalization, self-attention,
-                MLP, and residual connections.
-            :rtype: Array
-            """
-
-            def test():
-                def stats(desc: str, y: Array):
-                    m = ten.max(ten.abs(y), axis=-1)
-                    print(f"{desc} Max Abs Min: {ten.min(m)}, Max: {ten.max(m)}, Mean: {ten.mean(m)}")
-                    r = ten.sqrt(ten.mean(ten.pow(y, 2), axis=-1))
-                    rmsmin = ten.min(r)
-                    rmsmax = ten.max(r)
-                    rmsmean = ten.mean(r)
-                    print(f"{desc} RMS Min: {rmsmin}, Max: {rmsmax}, Mean: {rmsmean}")
-                    return
-                stats('input', x)
-                stats('x_norm', x_norm)
-                ilwm = ten.abs(input_layernorm.weight)
-                print(f"weights: Max Abs Min: {ten.min(ilwm)}, Max: {ten.max(ilwm)}, Mean: {ten.mean(ilwm)}")
-
-            x_norm = input_layernorm(x)
-            r = self_attn(x_norm)
-            h = x + r
-            h_norm = post_attention_layernorm(h)
-            r = mlp(h_norm)
-            out = h + r
-            return out
+        if post_mlp_layernorm is None:
+            def call(x: Array) -> Array:
+                h = input_layernorm(x)
+                h = attention(h)
+                x = x + h
+                h = post_attention_layernorm(x)
+                h = mlp(h)
+                x = x + h
+                return x
+        else:
+            def call(x: Array) -> Array:
+                h = input_layernorm(x)
+                h = attention(h)
+                x = x + h
+                h = post_attention_layernorm(x)
+                h = mlp(h)
+                h = post_mlp_layernorm(h)
+                x = x + h
+                return x
 
         return call
 
