@@ -1,10 +1,16 @@
 # tensile
 
-A dual-backend tensor framework for writing ML code once and running it on both [MLX](https://github.com/ml-explore/mlx) and [PyTorch](https://pytorch.org/) — including training loops, not just inference. The tensile.nn package also has its own `Module` system that supports declarative model building, patching, and instrumentation. Many common layers are implemented using this Module framework in `tensile.nn.layers`.
+Write ML code once. Run it on [MLX](https://github.com/ml-explore/mlx) or [PyTorch](https://pytorch.org/) — including full training loops.
 
-## What is this?
+Tensile is a research-oriented ML framework that combines:
 
-If you work across Apple Silicon (MLX) and CUDA (PyTorch), you know the pain: same math, completely different APIs for gradients, optimizer steps, device management, and evaluation semantics. Tensile sits between your code and the backend, providing a unified API that handles the hard differences so you don't have to.
+- a unified tensor and training API across MLX and PyTorch
+- a declarative typed object system for building ML components
+- a patchable, instrumentable module framework for rapid experimentation
+
+The goal is not just backend portability. It is to make model building, training, patching, and instrumentation composable in the same system.
+
+If you work across Apple Silicon and CUDA, the pain is familiar: the same ideas turn into different code because gradients, optimizer updates, execution semantics, and module APIs do not line up cleanly between backends. Tensile sits underneath your code and normalizes those differences so you can focus on the experiment rather than the plumbing.
 
 Switch backends with an environment variable:
 
@@ -132,14 +138,40 @@ The same pattern works for optimizers:
 ```python
 from tensile.optim import Optimizer
 
+model = ...
+
 optimizer = Optimizer.coerce({
-    "config": {
-        "kind": "adamw",
-        "lr": 1e-4,
-        "weight_decay": 0.01
-    }
+    "model": model,
+    "param_groups": [
+        {
+            "kind": "sgd",
+            "params": [
+                "lm_head.weight",
+                "**.q_proj.weight",
+                "model.layers.0.**.weight"
+            ],
+            "learning_rate": 1e-4,
+            "momentum": 0.9,
+        },
+        {
+            "kind": "adamw",
+            "learning_rate": {
+                "kind": "cosine",
+                "warmup_steps": 3_000,
+                "total_steps": 200_000,
+                "baser": 1.5e-3,
+                "min": 1.e-5,
+            },
+            "betas": [0.9, 0.95],
+            "eps": 1.e-8,
+        }
+    ],
 })
 ```
+
+Here we see few things beyond just the declarative syntax. We also have two parameter groups, using two different algorithms. Each group can use wild cards to select parameters (`*` matches any segment between `.` and `**` matches multiple segments). And finally, we see that optimzer schedules are first class objects that can be declaratively configured as well.
+
+This configuration "just works" on both PyTorch and MLX, using their native optimizer implementations.
 
 This makes experiment configuration declarative and keeps implementation details out of your training scripts.
 
@@ -188,7 +220,7 @@ There is a complete composible predicate system that lets you pick which modules
 
 ## What else is in here
 
-**tensile.infa** an infrastructure library for writing objects with smart fields that take part in a registry that uses a provides/coerce pattern.
+**tensile.infra** an infrastructure library for writing objects with smart fields that take part in a registry that uses a provides/coerce pattern.
 
 **tensile.nn** a new base Module class that supports compiling modules and easily instrumenting them.
 
