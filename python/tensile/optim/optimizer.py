@@ -19,7 +19,7 @@ from collections.abc import Container
 from pathlib import Path
 
 from ..infra import RootObject
-from ..infra.util import StringBuffer
+from ..infra.util import StringBuffer, process_specs
 from ..nn import Module
 from ..nn.common import *
 
@@ -28,6 +28,7 @@ from .types import (
     GradientHandler, OptimizerStep, OptimizerStepHandler, TrainFunction, Batch,
     OptimizerStartStep, OptimizerEndStep
 )
+from ..nn.module.module import is_trainable_parameter_traverser
 
 
 class BasicStepHandler(RootObject, Generic[Batch]):
@@ -201,6 +202,7 @@ class OptimizerConfig(Object):
         return str(buff)
 
 
+
 def filter_tree(arrays: tree.Tree[Array], paths: Container[str]) -> tree.Tree[Array]:
     """Filter a parameter or gradient tree down to a set of named paths."""
     return tree.filter(arrays, include=lambda e: e.path in paths and ten.is_array(e.value))
@@ -288,6 +290,28 @@ class OptimizerParamGroup(Object):
     def _repr_args(self, **options) -> str:
         return f'{self.group}: {len(self.params)} params'
 
+    @classmethod
+    def _coerce_from_mapping(cls, spec: Mapping[str, Any], /, **kwargs):
+        kind, spec = process_specs(spec, kwargs)
+        if 'config' not in spec:
+            new_spec = {}
+            config = {}
+            for key, value in spec.items():
+                if key not in known_keys:
+                    config[key] = value
+                else:
+                    new_spec[key] = value
+            if config:
+                config['kind'] = kind
+                new_spec['config'] = config
+            spec = new_spec
+
+        return cls(spec)
+        # kind = ten.ten_kind
+        # if factory := cls.meta.get_factory(kind=kind):
+        #     return factory(spec)
+        # raise ValueError(f'Cannot coerce {spec} to kind [{kind}] of {cls}')
+
 
 class OptimizerParamInfo(RootObject):
     """Information about a single optimizer parameter."""
@@ -320,16 +344,21 @@ class Optimizer(Object, Generic[Batch]):
                  'step_handler', 'backends')
 
     model: Annotated[Module, field(
-        doc='The model to optimize.'
+        doc='The model to optimize.',
+        init_order=0,
+        required=True,
     )]
     params: Annotated[Optional[set[str]], field(
         doc='The parameters for this optimizer.',
+        init_order=1,
     )]
     all_params: Annotated[dict[str, OptimizerParamInfo], field(
         doc='All parameters for this optimizer.',
+        readonly=True,
     )]
     config: Annotated[Optional[OptimizerConfig], field(
         doc='The config for this optimizer.',
+        init_order=2,
         coerce=True,
     )]
     current_step: Annotated[Array, field(
@@ -337,6 +366,7 @@ class Optimizer(Object, Generic[Batch]):
     )]
     param_groups: Annotated[list[OptimizerParamGroup], field(
         doc='The parameter groups for this optimizer.',
+        init_order=3,
         default_factory=list,
     )]
     step_handler: Annotated[Optional[OptimizerStepHandler[Batch]], field(
@@ -352,8 +382,13 @@ class Optimizer(Object, Generic[Batch]):
         if spec is None:
             return []
         elif isinstance(spec, Iterable):
+            candidate_params = self.params
+            if not candidate_params:
+                candidate_params = set()
+                for param, value in tree.traverse(self.model, traverser=is_trainable_parameter_traverser):
+                    candidate_params.add(param)
             param_group_specs = list(spec)
-            all_params = set()
+            used_params = set()
             rest_group = None
             for g, pg_spec in enumerate(param_group_specs):
                 if not isinstance(pg_spec, dict):
@@ -368,12 +403,29 @@ class Optimizer(Object, Generic[Batch]):
                     else:
                         raise ValueError(f'No parameters specified for group {g}')
                 else:
-                    all_params.update(params)
+                    pg_spec['params'] = new_params = []
+                    for param in params:
+                        if isinstance(param, str):
+                            if tree.is_path_pattern(param):
+                                param_like = tree.str_like(param)
+                                for cand_param in candidate_params:
+                                    if param_like(cand_param):
+                                        if cand_param in used_params:
+                                            self.warn(f'Param group {g} matches {param} against {cand_param}')
+                                        else:
+                                            used_params.add(cand_param)
+                                            new_params.append(cand_param)
+                            else:
+                                used_params.update(param)
+                                new_params.append(param)
+                        else:
+                            raise ValueError(f'Invalid parameter spec: {param}')
             if rest_group is not None:
-                if self.params is None:
-                    params = set(path for path, v in tree.flatten(self.model.trainable_parameters())) - all_params
-                else:
-                    params = set(self.params) - all_params
+                params = candidate_params - used_params
+                # if self.params is None:
+                #     params = set(path for path, v in tree.flatten(self.model.trainable_parameters())) - all_params
+                # else:
+                #     params = set(self.params) - all_params
                 rest_group['params'] = params
 
             return [OptimizerParamGroup(pg_spec) for pg_spec in param_group_specs]
@@ -544,13 +596,26 @@ class Optimizer(Object, Generic[Batch]):
 
     @classmethod
     def _coerce_from_mapping(cls, spec: Mapping[str, Any], /, **kwargs):
-        if 'kind' not in spec and 'kind' not in kwargs:
-            kwargs['kind'] = ten.ten_kind
-        else:
-            kind = kwargs.get('kind', spec.get('kind'))
-            if kind == 'native':
-                kwargs['kind'] = 'native.' + ten.ten_kind
-        return super()._coerce_from_mapping(spec, **kwargs)
+        kind, spec = process_specs(spec, kwargs)
+        if 'config' not in spec:
+            new_spec = {}
+            config = {}
+            for key, value in spec.items():
+                if key not in known_keys:
+                    config[key] = value
+                else:
+                    new_spec[key] = value
+            if config:
+                config['kind'] = kind
+                new_spec['config'] = config
+            spec = new_spec
+        kind = ten.ten_kind
+        if factory := cls.meta.get_factory(kind=kind):
+            return factory(spec)
+        raise ValueError(f'Cannot coerce {spec} to kind [{kind}] of {cls}')
+
+
+known_keys = {'model', 'params', 'config', 'current_step', 'param_groups'}
 
 
 @provides(OptimizerConfig, 'sgd')
