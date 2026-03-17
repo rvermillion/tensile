@@ -29,7 +29,7 @@ class Attend(CompiledModule):
     def scores_factory(self, queries: Array, qs: slice, v_dim: int) -> AttentionScores:
         return AttentionScores(queries, qs, v_dim)
 
-    def build_prepare(self) -> Callable[[Array, Array, Array], QKV]:
+    def build_prepare(self, mode: CompiledModule.Mode) -> Callable[[Array, Array, Array], QKV]:
         dtype = self.dtype
         contiguous = self.contiguous
         if dtype is None:
@@ -97,11 +97,11 @@ class DefaultAttend(Attend):
 
         return scores.out
 
-    def build_call(self, train: bool = False, **options) -> AttendFunction:
+    def build_call(self, mode: CompiledModule.Mode, **options) -> AttendFunction:
         tile_size = self.tile_size
         score = self.score
         scores_factory = self.scores_factory
-        prepare = self.build_prepare()
+        prepare = self.build_prepare(mode)
 
         if tile_size is None:
             # noinspection PyPep8Naming
@@ -213,54 +213,6 @@ class FastAttend(CompiledModule):
     def score(self, queries: Array, keys_t: Array, qs: Optional[slice], ks: Optional[slice], /, offset: int = 0, **extra) -> Array:
         return ten.matmul(queries, keys_t)
 
-    def build_call(self, train: bool = False, **options) -> AttendFunction:
+    def build_call(self, mode: CompiledModule.Mode, **options) -> AttendFunction:
         return fast_attend
-
-
-default_initial_beta = -20.
-
-
-@provides(Attend, 'sink')
-class AttendWithSink(DefaultAttend):
-
-    __slots__ = ('betas', 'null_values')
-
-    betas: Annotated[Array, field(
-        doc='The beta value to use for the attention mechanism',
-        parameter=True,
-    )]
-    null_values: Annotated[Array, field(
-        doc='The null value to use for the attention mechanism',
-        parameter=True,
-    )]
-
-    def init_from_args(self, args: ModuleArgs):
-        super().init_from_args(args)
-
-        n_q_heads = args.get('num_attention_heads')
-        n_kv_heads = args.get('num_key_value_heads')
-        hidden_size = args.get('hidden_size')
-        initial_beta = args.get('initial_beta', default=default_initial_beta)
-        dtype = ten.dtype(args.get('dtype', default=ten.float32))
-
-        if args.get('nilpotent', False):
-            null_values = ten.zeros((1, n_kv_heads, 1, 1, hidden_size // n_q_heads), dtype=dtype)
-            betas = ten.full((1, n_kv_heads, 1, 1, 1), initial_beta, dtype=dtype)
-        else:
-            size = n_kv_heads * (hidden_size//n_q_heads)
-            scale = size ** 0.5
-            null_values = ten.as_type(ten.random.normal(scale=scale, shape=(1, n_kv_heads, 1, 1, hidden_size // n_q_heads)), dtype)
-            betas = ten.full((1, n_kv_heads, 1, 1, 1), 0., dtype=dtype)
-
-        ten.eval(null_values, betas)
-
-        self.betas = betas
-        self.null_values = null_values
-
-    def scores_factory(self, queries: Array, qs: slice, v_dim: int) -> AttentionScores:
-        scores = AttentionScores(queries, qs, v_dim)
-        scores.add_unmasked(self.betas, self.null_values)
-        return scores
-
-
 
