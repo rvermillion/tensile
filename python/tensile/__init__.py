@@ -10,25 +10,30 @@
 #     from .shims import torch as ten
 # from .shims.mlx import core as ten
 # from .shims import torch as ten
-
-from . import infra, util
+# import sys
+from . import infra, util, ten
 
 infrastructure = infra
 
-from .shims import ten
+# from .shims import ten
+# sys.modules['tensile.ten'] = ten
+#
 from .util import select
 
-Array = ten.Array
-ArrayLike = ten.ArrayLike
-AxisSelector = ten.AxisSelector
-DType = ten.DType
-DTypeLike = ten.DTypeLike
-Scalar = ten.Scalar
-Selector = ten.Selector
-Shape = ten.Shape
-Slice = slice
-
-full_slice: AxisSelector = slice(None)
+from .ten import (
+    Array,
+    ArrayLike,
+    AxisSelector,
+    DType,
+    DTypeLike,
+    Scalar,
+    Selector,
+    Shape,
+)
+from .common import (
+    Slice,
+    full_slice,
+)
 
 
 __all__ = [

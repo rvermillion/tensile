@@ -17,7 +17,7 @@ meta_by_qname: dict[str, 'Meta'] = {}
 qname_listeners: dict[str, list[Callable[['Meta'], None]]] = {}
 
 
-def append_item(d: dict, key: str, item: Any) -> None:
+def append_item(d: dict[str, list], key: str, item: Any) -> None:
     if items := d.get(key):
         items.append(item)
     else:
@@ -80,7 +80,7 @@ class ModuleFallback(RootObject):
             for mname in self.iter_modules(kind):
                 try:
                     module = importlib.import_module(mname)
-                    self.warn('{}: dynamically loaded module [{}] for kind [{}]', registry, mname, kind)
+                    self.debug('{}: dynamically loaded module [{}] for kind [{}]', registry, mname, kind)
                     if registry.namespaces is None:
                         registry.namespaces = [module]
                     else:
@@ -219,6 +219,16 @@ class Registry(RootObject, Generic[T]):
             return kinds.get_kind(impl)
         return None
 
+    def has_kind_for_impl(self, impl: type) -> bool:
+        if kinds := self.kinds:
+            return impl in kinds.kinds_for_impls
+        return False
+
+    def get_impl_for_kind(self, kind: str) -> Optional[type]:
+        if kinds := self.kinds:
+            return kinds.get_impl(kind)
+        return None
+
     def put_implementation(self, impl: type, *, key: str = None, kind: str = None, from_type: str = None,
                            override: bool = False) -> Optional[Factory[Any]]:
         factory = getattr(impl, 'provide_from', impl)
@@ -275,9 +285,9 @@ class Registry(RootObject, Generic[T]):
         key = factory_key(key=key, kind=kind, from_type=from_type, default_kind=self.default_kind)
         factory = self.peek_factory(key)
 
-        if kind == 'relu':
-            pass
         if factory is None:
+            if kind and '.' in kind:
+                print(f'Got a kind with a dot: {kind}')
             factory = Registry.method_factory(self.ifc, key, reg=self)
             # if key.startswith('from:'):
             #     fallback_method = f'_coerce_from_{key[5:]}'

@@ -169,8 +169,12 @@ class ConfigData(Representable):
 
         if inherit is None or inherit is True:
             inherit = keys[0] if keys else None
-        # elif inherit != keys[0]:
-        #     print(f'explict inherit given: {inherit}')
+
+        # We check for local defaults before we go up to the parents
+        if defaults := self.defaults:
+            for key in keys:
+                if key in defaults:
+                    yield defaults[key]
 
         step = self.step
         if (parent := self.parent_for_iter) is not None:
@@ -196,9 +200,13 @@ class ConfigData(Representable):
                     if matcher.matches(key, config=self.config):
                         yield matcher.value
 
-    def get_local(self, *keys: str, default: Any = None) -> Any:
+    def get_local_or_default(self, *keys: str, default: Any = None) -> Any:
         for val in self.local(*keys):
             return val
+        if defaults := self.defaults:
+            for key in keys:
+                if key in defaults:
+                    return defaults[key]
         return default
 
     # noinspection PyShadowingNames
@@ -210,14 +218,20 @@ class ConfigData(Representable):
                 return val
         else:
             if field.is_config:
-                val = self.get_local(key, *field.aliases, default=...)
+                val = self.get_local_or_default(key, *field.aliases, default=...)
                 if val is None:
                     self.cache[key] = val
                     return val
 
                 fallback = self.iterable(key, *field.aliases)
+                values = tuple(self.local(key))
+                if not values and field.type.optional:
+                    fallback = list(fallback)
+                    if not fallback:
+                        return field.default
+
                 log.debug('config {}: making {} for {}: {}', self.path, field.type.qname, key, fallback)
-                val = field.make_config(*self.local(key), step=key, fallback=fallback, parent=self)
+                val = field.make_config(*values, step=key, fallback=fallback, parent=self)
                 self.cache[key] = val
                 return val
             for val in self.iter(key, *field.aliases, inherit=field.inherit):

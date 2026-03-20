@@ -2,7 +2,7 @@
 
 import contextlib
 
-from ..common import ten, Object, field, Annotated, Any, ClassVar, Optional, Self, TypeVar, TYPE_CHECKING
+from .common import ten, Object, field, Annotated, Any, ClassVar, Optional, Self, TypeVar, TYPE_CHECKING
 
 
 if TYPE_CHECKING:
@@ -14,7 +14,7 @@ F = TypeVar('F', bound='ForwardContext')
 
 class ForwardContext(Object):
 
-    __slots__ = ('parent', 'model', 'params', 'stream', 'debugging', 'training')
+    __slots__ = ('parent', 'model', 'params', 'stream', 'debugging')
 
     parent: Annotated[Optional['ForwardContext'], field(
         doc='The parent context.'
@@ -31,9 +31,6 @@ class ForwardContext(Object):
     debugging: Annotated[bool, field(
         doc='Whether to enable debug logging.',
         default=False,
-    )]
-    training: Annotated[Any, field(
-        doc='The training for this forward pass'
     )]
 
     def _lazy_params(self) -> dict[str, Any]:

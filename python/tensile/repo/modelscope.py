@@ -20,7 +20,7 @@ def repo_to_local_path(repo: str|Path, local_files_only: bool = True) -> Path:
     raise NotImplementedError()
 
 
-@provides(Repo, repo_provider)
+@provides(Repo, repo_provider, 'ms')
 class ModelscopeRepo(Repo):
 
     __slots__ = ()

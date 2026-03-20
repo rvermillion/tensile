@@ -1,7 +1,7 @@
 #  Copyright (c) 2026. Richard Vermillion. All Rights Reserved.
 
 from ..common import Annotated, Array, Callable, Optional, ten, field, provides
-from ..module import CompiledModule, ModuleArgs
+from ..module import CompiledModule, FunctionModule, Functional, Module, ModuleArgs, WrapperModule
 
 
 class NormalizationArgs(ModuleArgs):
@@ -11,7 +11,7 @@ class NormalizationArgs(ModuleArgs):
     bias: bool = True
 
 
-class Normalization(CompiledModule):
+class Normalization(FunctionModule):
 
     __slots__ = ('dims', 'eps', 'affine')
 
@@ -105,10 +105,10 @@ class LayerNorm(AffineNorm):
 
     __slots__ = ()
 
-    def build_call(self, train: bool = False, **options) -> Callable:
+    def build_call(self, mode: CompiledModule.Mode, **options) -> Functional:
         eps = self.eps
 
-        def call(x):
+        def call(x: Array, /) -> Array:
             return ten.fast.layer_norm(x, self.weight, self.bias, eps)
 
         return call
@@ -152,10 +152,10 @@ class RMSNorm(Normalization):
         w = self.weight
         return f"{() if w is None else w.shape[0]}, eps={self.eps}"
 
-    def build_call(self, train: bool = False, **options) -> Callable:
+    def build_call(self, mode: CompiledModule.Mode, **options) -> Functional:
         eps = self.eps
 
-        def call(x: ten.Array) -> ten.Array:
+        def call(x: Array, /) -> Array:
             return ten.fast.rms_norm(x, self.weight, eps)
 
         return call
@@ -200,7 +200,7 @@ class InstanceNorm(AffineNorm):
     def init_from_args(self, args: NormalizationArgs, bias: bool = False):
         super().init_from_args(args, bias=True)
 
-    def build_call(self, train: bool = False, **options) -> Callable:
+    def build_call(self, mode: CompiledModule.Mode, **options) -> Functional:
         eps = self.eps
         if self.weight is None:
             def call(x: Array) -> Array:
@@ -213,7 +213,7 @@ class InstanceNorm(AffineNorm):
                 # Scale and shift if necessary
                 return x
         else:
-            def call(x: Array) -> Array:
+            def call(x: Array, /) -> Array:
                 reduction_axes = tuple(range(1, x.ndim - 1))
                 # Compute stats
                 mean = ten.mean(x, axis=reduction_axes, keepdims=True)
@@ -276,12 +276,12 @@ class GroupNorm(AffineNorm):
             f"affine={self.weight is not None}, pytorch_compatible={self.pytorch_compatible}"
         )
 
-    def build_call(self, train: bool = False, **options) -> Callable:
+    def build_call(self, mode: CompiledModule.Mode, **options) -> Functional:
         eps = self.eps
         num_groups = self.num_groups
 
         if self.pytorch_compatible:
-            def group_norm(x):
+            def group_norm(x: Array, /) -> Array:
                 batch, *rest, dims = x.shape
                 group_size = dims // num_groups
 
@@ -296,7 +296,7 @@ class GroupNorm(AffineNorm):
                 x = ten.transpose(x, (0, 2, 1, 3)).reshape(batch, *rest, dims)
                 return x
         else:
-            def group_norm(x):
+            def group_norm(x: Array, /) -> Array:
                 batch, *rest, dims = x.shape
 
                 # Split into groups
@@ -313,7 +313,7 @@ class GroupNorm(AffineNorm):
         if self.weight is None:
             call = group_norm
         else:
-            def call(x: Array) -> Array:
+            def call(x: Array, /) -> Array:
                 return self.weight * group_norm(x) + self.bias
         return call
 
@@ -416,12 +416,12 @@ class BatchNorm(Normalization):
             f"track_running_stats={self.track_running_stats}"
         )
 
-    def build_call(self, train: bool = False, **options) -> Callable:
+    def build_call(self, mode: CompiledModule.Mode, **options) -> Functional:
         mu = self.momentum
         eps = self.eps
 
         if self.track_running_stats:
-            if train:
+            if mode.is_train():
                 def get_stats(x: Array) -> tuple[Array, Array]:
                     reduction_axes = tuple(range(0, x.ndim - 1))
 
@@ -442,7 +442,7 @@ class BatchNorm(Normalization):
                 return mean, var
 
         if self.weight is None:
-            def call(x: Array) -> Array:
+            def call(x: Array, /) -> Array:
                 if x.ndim < 2 or x.ndim > 4:
                     raise ValueError(f"Expected input tensor to have 2, 3 or 4 dimensions, but got {x.ndim}")
 
@@ -451,7 +451,7 @@ class BatchNorm(Normalization):
                 return x
         else:
 
-            def call(x: Array) -> Array:
+            def call(x: Array, /) -> Array:
                 if x.ndim < 2 or x.ndim > 4:
                     raise ValueError(f"Expected input tensor to have 2, 3 or 4 dimensions, but got {x.ndim}")
 
@@ -461,3 +461,77 @@ class BatchNorm(Normalization):
 
         return call
 
+
+class NormedModuleArgs(ModuleArgs):
+
+    pre_norm: Optional[NormalizationArgs] = None
+    body: ModuleArgs
+    post_norm: Optional[NormalizationArgs] = None
+
+
+
+@provides(Module, 'normed')
+class NormedModule(WrapperModule, FunctionModule):
+    r"""A module that normalizes its inputs."""
+
+    __slots__ = ('pre_norm', 'post_norm')
+
+    pre_norm: Annotated[Optional[Normalization], field(
+        doc="Prenormalization for the module.",
+    )]
+    body: Annotated[FunctionModule, field(
+        doc="The module to wrap.",
+        ignore=True,
+    )]
+    post_norm: Annotated[Optional[Normalization], field(
+        doc="Postnormalization for the module.",
+    )]
+
+
+    def init_from_args(self, args: NormedModuleArgs):
+        super().init_from_args(args)
+
+        self.pre_norm = self.build_pre_norm(args)
+        self.post_norm = self.build_post_norm(args)
+
+    def build_pre_norm(self, args: NormedModuleArgs) -> Optional[Normalization]:
+        if norm_args := args.pre_norm:
+            return Normalization.from_args(norm_args)
+        return None
+
+    def build_post_norm(self, args: NormedModuleArgs) -> Optional[Normalization]:
+        if norm_args := args.post_norm:
+            return Normalization.from_args(norm_args)
+        return None
+
+    def build_call(self, mode: CompiledModule.Mode, **options) -> Functional:
+        pre_norm = self.pre_norm
+        body = self.body
+        post_norm = self.post_norm
+
+        if pre_norm is None:
+            if post_norm is None:
+                return body
+
+            def call(x: Array, /) -> Array:
+                h = body(x)
+                return post_norm(h)
+        else:
+            if post_norm is None:
+                def call(x: Array, /) -> Array:
+                    h = pre_norm(x)
+                    return body(h)
+            else:
+                def call(x: Array) -> Array:
+                    h = pre_norm(x)
+                    h = body(h)
+                    return post_norm(h)
+        return call
+
+    def __getattr__(self, item):
+        # print(f'Getting item: {item}')
+        return getattr(self.body, item)
+
+    unwrapped_keys = {*WrapperModule.unwrapped_keys, 'pre_norm', 'post_norm'}
+
+    Args = NormedModuleArgs

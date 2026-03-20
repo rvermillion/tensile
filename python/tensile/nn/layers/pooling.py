@@ -4,7 +4,7 @@ import operator
 from itertools import accumulate
 
 from ..common import *
-from ..module import CompiledModule, ModuleArgs
+from ..module import CompiledModule, FunctionModule, Functional, ModuleArgs
 
 
 class PoolingArgs(ModuleArgs):
@@ -100,7 +100,7 @@ pooling_names: dict[str, str] = {
 }
 
 
-class Pool(CompiledModule):
+class Pool(FunctionModule):
 
     __slots__ = ("d", "pool", "kernel_size", "stride", "padding")
 
@@ -150,7 +150,7 @@ class Pool(CompiledModule):
     def out_dim(self) -> int:
         return -1
 
-    def build_call(self, train: bool = False, **options) -> Callable:
+    def build_call(self, mode: CompiledModule.Mode, **options) -> Functional:
         if self.pool == avg_pooling:
             pool = ten.mean
             padding_value = 0.
@@ -167,12 +167,12 @@ class Pool(CompiledModule):
 
         if any(p[0] > 0 for p in padding):
             full_padding = [(0, 0)] + padding + [(0, 0)]
-            def call(x):
+            def call(x: Array, /) -> Array:
                 x = ten.pad(x, full_padding, constant_values=padding_value)
                 x = _sliding_windows(x, kernel_size, stride)
                 return pool(x, axis=axes)
         else:
-            def call(x):
+            def call(x: Array, /) -> Array:
                 x = _sliding_windows(x, kernel_size, stride)
                 return pool(x, axis=axes)
         return call

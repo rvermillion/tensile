@@ -32,7 +32,7 @@ Getter = Callable[[T], Y]
 Setter = Callable[[T, X], None]
 Deleter = Callable[[T], None]
 Coercer = Callable[[T, Any], Y]
-Initter = Callable[[T, 'Spec'], None]
+Initter = Callable[[T, 'Spec'], str|None]
 IsSetter = Callable[[T], bool]
 
 P = typing.ParamSpec('P')
@@ -43,9 +43,9 @@ BinaryFunction = Function[[U, V], X]
 PredicateFunction = Function[[U], bool]
 TransformFunction = Function[[U], X]
 
-Relation = Function[[U, V], bool]
+Relation = Callable[[U, V], bool]
 
-Comparison = Relation[U, U]
+Comparison = Callable[[U, U], bool]
 
 Equiv = Relation[U, U]
 
@@ -195,5 +195,8 @@ class Factory(Protocol[T]):
     def __call__(self, *args, **kwargs) -> T: ...
 
 
-JSON = Union[dict[str, 'JSON'], list['JSON'], str, int, float, bool, None]
+JSONValue = Any  #Union[str, int, float, bool, None]
+JSONObject = dict[str, Any]
+JSONList = list[Any]
+JSON = Union[JSONObject, JSONList, JSONValue]
 

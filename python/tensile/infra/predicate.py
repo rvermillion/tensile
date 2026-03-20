@@ -381,7 +381,7 @@ class Predicate(Generic[U]):
         return InversePredicate(self)
 
     def __repr__(self):
-        return 'PredicateFunction(' + self.describe('x') + ')'
+        return 'Predicate(' + self.describe('x') + ')'
 
 
 tie_call(Predicate, 'evaluate')
@@ -852,6 +852,7 @@ inverses: dict[Comparison, Comparison] = {
     op.is_not: op.is_,
 }
 
+
 implications: dict[tuple[Comparison, Comparison], Comparison] = {
     (op.eq, op.eq): lambda x, y: x == y,
     (op.ne, op.ne): lambda x, y: x == y,
@@ -1264,6 +1265,13 @@ class Predicates:
         return XorPredicate(coerce(left), coerce(right))
 
     @staticmethod
+    def is_in(container: Container[X]) -> Predicate[X]:
+        def pred(x: Container[X]) -> bool:
+            return x in container
+        base = Predicate(name_function(pred, f'is_in[{container!r}]'))
+        return Predicates.is_str & describe(base, lambda p, arg: f'({arg} in {container!r})')
+
+    @staticmethod
     def eq(value: X) -> Predicate[X]:
         return ComparePredicate(op.eq, value)
 
@@ -1304,11 +1312,11 @@ class Predicates:
         return Predicates.transform(infra.transforms.length, coerce(predicate))
 
     @staticmethod
-    def contains(s: str) -> Predicate[str]:
-        def pred(x: str) -> bool:
+    def contains(s: X) -> Predicate[Container[X]]:
+        def pred(x: Container[X]) -> bool:
             return s in x
         base = Predicate(name_function(pred, f'contains[{s!r}]'))
-        return Predicates.is_str & describe(base, lambda p, arg: f'({arg} in {s!r})')
+        return Predicates.is_str & describe(base, lambda p, arg: f'({s!r} in {arg})')
 
     @staticmethod
     def matches(s: str|re.Pattern) -> Predicate[str]:

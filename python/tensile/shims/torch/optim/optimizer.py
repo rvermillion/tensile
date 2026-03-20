@@ -4,7 +4,7 @@ from pathlib import Path
 import torch
 import torch.optim as optim
 
-from tensile.nn.common import *
+from tensile.common import *
 
 from tensile.optim.types import *
 from tensile.optim.optimizer import Optimizer, OptimizerParamGroup, OptimizerStep

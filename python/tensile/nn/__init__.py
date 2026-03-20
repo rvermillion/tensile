@@ -2,7 +2,7 @@
 
 from typing import TYPE_CHECKING
 
-from ..shims import ten
+from .. import ten
 
 if TYPE_CHECKING:
     # from ..shims.numpy.nn import *
@@ -26,5 +26,8 @@ else:
 
 from . import module, activations, layers, losses, quantization
 
-from .module import CompiledModule, Module, ModuleArgs
+from .args import ModuleArgs
+from .module import CompiledModule, Module
+from .context import ForwardContext
+from .instrument import Instrument
 from .patch import Patch

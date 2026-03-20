@@ -1,12 +1,13 @@
 name: Phi-4-mini-instruct
 org: microsoft
-kind: default
+kind: language
 repo: hf:microsoft/Phi-4-mini-instruct
 model_type: phi3
 dtype: bfloat16
 lm:
   vocab_size: 200064
   hidden_dim: 3072
+  window_size: 262144
   layers:
     count: 32
     _:
@@ -141,10 +142,14 @@ lm:
           kind: mlp.fused-glu
           activation: silu
           bias: false
-#          in_dim: 3072
+          in_dim: 3072
           hidden_dim: 8192
-#          out_dim: 3072
+          out_dim: 3072
   norm:
     kind: rms
     dims: 3072
     eps: 1.0e-05
+cache:
+  kind: sliding_window
+  window_size: 262144
+

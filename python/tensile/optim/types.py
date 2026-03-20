@@ -3,7 +3,7 @@
 from tensile import Array
 from tensile.infra.tree import TreeEntry
 from tensile.nn import Module
-from tensile.infra.types import Callable, Iterable, Protocol, TypeVar, TYPE_CHECKING
+from tensile.infra.types import Any, Callable, Iterable, Protocol, TypeVar, TYPE_CHECKING
 
 if TYPE_CHECKING:
     import tensile.optim.optimizer
@@ -36,7 +36,7 @@ class OptimizerStep(Protocol[Batch]):
 
 class GradientHandler(Protocol):
 
-    def __call__(self, optimizer: 'tensile.optim.optimizer.Optimizer', grads: Iterable[TreeEntry[Array]]) -> None: ...
+    def __call__(self, optimizer: 'tensile.optim.optimizer.Optimizer', grads: Iterable[tuple[str, Array]]) -> Any: ...
 
 
 OptimizerStartStep = Callable[['tensile.optim.optimizer.Optimizer[Batch]', Batch], None]

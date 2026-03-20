@@ -1,8 +1,9 @@
 #  Copyright (c) 2026. Richard Vermillion. All Rights Reserved.
+from functools import partial
 
 import math
 
-from .util import shift_slice
+from .util import reshape_qkv, shift_slice
 from ..common import *
 from ..module import CompiledModule, ModuleArgs
 from .score import AttentionScores
@@ -59,8 +60,8 @@ class Attend(CompiledModule):
         return prepare
 
 
-@provides(Attend, 'default')
-class DefaultAttend(Attend):
+@provides(Attend, 'custom')
+class CustomAttend(Attend):
 
     __slots__ = ('score', 'tile_size')
 
@@ -75,9 +76,9 @@ class DefaultAttend(Attend):
         super().init_from_args(args)
 
         self.tile_size = args.get('tile_size', None)
-        self.score = self.build_score()
+        self.score = self.init_score()
 
-    def build_score(self) -> AttentionScorer:
+    def init_score(self) -> AttentionScorer:
         return coerce(AttentionScorer, kind='sdpa')
 
     def attend(self, queries: Array, qs: slice, kv_iter: Iterable[KVSlice], /, scale: float = None, masker: AttentionMasker = None,
@@ -111,6 +112,9 @@ class DefaultAttend(Attend):
                        offset: int = 0,
                        **extra,
                        ) -> Array:
+
+                queries, keys, values = reshape_qkv(queries, keys, values, force_five=True)
+
                 Q = queries.shape[-2]
                 K = keys.shape[-2]
                 D_v = values.shape[-1]
@@ -143,6 +147,8 @@ class DefaultAttend(Attend):
                        offset: int = 0,
                        **extra,
                        ) -> Array:
+
+                queries, keys, values = reshape_qkv(queries, keys, values, force_five=True)
 
                 ten.debug_eval(queries, keys)
 
@@ -201,18 +207,69 @@ class DefaultAttend(Attend):
 
 def fast_attend(queries: Array, keys: Array, values: Array, /,
                 scale: float = None, masker: AttentionMasker = None, offset: int = 0, **extra) -> Array:
+    # if queries.ndim == 5:
+    #     queries = ten.flatten(queries, 1, 2)
+    # if keys.ndim == 5:
+    #     keys = ten.flatten(keys, 1, 2)
+    # if values.ndim == 5:
+    #     values = ten.flatten(values, 1, 2)
+    #
     return ten.fast.scaled_dot_product_attention(queries, keys, values, scale=scale,
-                                                 mask='causal' if masker.causal else masker.mask)
+                                                 mask='causal' if masker is None or masker.causal else masker.mask)
 
 
-@provides(Attend, 'fast')
-class FastAttend(CompiledModule):
+@provides(Attend, 'default', 'sdpa')
+class DefaultAttend(Attend):
 
-    __slots__ = ()
+    __slots__ = ('use_fast', 'precise')
+
+    use_fast: Annotated[bool, field(
+        default=True
+    )]
+    precise: Annotated[bool, field(
+        default=True
+    )]
+
+    def init_from_args(self, args: ModuleArgs):
+        super().init_from_args(args)
+        self.use_fast = args.get('use_fast', False)
+        self.precise = args.get('precise', True)
 
     def score(self, queries: Array, keys_t: Array, qs: Optional[slice], ks: Optional[slice], /, offset: int = 0, **extra) -> Array:
         return ten.matmul(queries, keys_t)
 
     def build_call(self, mode: CompiledModule.Mode, **options) -> AttendFunction:
-        return fast_attend
+        if self.use_fast:
+            attend = fast_attend
+        else:
+            score = self.subinstrument('score', ten.matmul, mode)
+            softmax = partial(ten.softmax, precise=True) if self.precise else ten.softmax
+            normalize_scores = self.subinstrument('normalize_scores', softmax, mode)
+            weight_values = self.subinstrument('weight_values', ten.matmul, mode)
+
+            def attend(queries: Array, keys: Array, values: Array, /,
+                       scale: float = None,
+                       masker: AttentionMasker = None,
+                       offset: int = 0,
+                       **extra,
+                       ) -> Array:
+
+                queries, keys, values = reshape_qkv(queries, keys, values, force_five=True)
+
+                if scale is None:
+                    scale = 1. / math.sqrt(queries.shape[-1])
+
+                queries = scale * queries
+                keys_t = ten.swapaxes(keys, -1, -2)
+
+                scores = score(queries, keys_t)
+                masked_scores = scores if masker is None else masker(scores)
+                weights = normalize_scores(masked_scores, axis=-1)
+
+                out = weight_values(weights, values)
+
+                return out
+
+        return attend
+
 

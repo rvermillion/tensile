@@ -1,11 +1,13 @@
 #  Copyright (c) 2026. Richard Vermillion. All Rights Reserved.
 from pathlib import Path
 import glob
+import requests
 
-from ..repo import repo_to_local_path
+from .. import ten
+from ..repo import Repo, repo_to_local_path
 from ..infra import coerce, meta, log
 from ..infra.types import *
-from ..shims import ten
+from .architecture import Architecture
 from .model import Model
 
 
@@ -158,7 +160,7 @@ def load_model(
 
 
 model_dirs: list[Path] = [
-    p.resolve() for p in [Path(__file__).parent / "../../../models"] if p.is_dir()
+    p.resolve() for p in [Path(__file__).parent / "_configs"] if p.is_dir()
 ]
 
 
@@ -189,10 +191,12 @@ def find_model_path(path: str|Path) -> Path:
             if model_path := _check_path(model_dir / path):
                 if model_path.exists():
                     break
-        else:
-            model_path = repo_to_local_path(path)
+                else:
+                    model_path = None
+        # else:
+        #     model_path = repo_to_local_path(path)
         if model_path is None:
-            raise ValueError(f"Could not find path: {path}")
+            raise FileNotFoundError(f"Could not find path: {path}")
         return model_path.resolve()
     raise ValueError(f"Path must be a string or Path: {path}")
 
@@ -200,3 +204,29 @@ def find_model_path(path: str|Path) -> Path:
 # noinspection PyShadowingNames,PyPep8Naming
 def load_model_from_config(config: dict[str, Any], Model: type[M] = Model) -> M:
     return coerce(Model, config)
+
+
+def fetch_hf_config(repo: str) -> dict:
+    url = f'https://huggingface.co/{repo}/raw/main/config.json'
+    return requests.get(url).json()
+
+
+def model_from_pretrained(name: str) -> Model:
+    try:
+        model_path = find_model_path(name.lower())
+        with open(model_path, "r") as f:
+            config = yaml.safe_load(f)
+    except FileNotFoundError as e:
+        config = None
+
+    if config is None:
+        repo = coerce(Repo, name)
+        repo_config = repo.fetch_config()
+        arch = Architecture.from_config(repo_config)
+        config = arch.convert(repo.name, repo.qname, org=repo.org)
+
+    return load_model_from_config(config)
+
+
+Model.from_pretrained = model_from_pretrained
+

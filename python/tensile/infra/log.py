@@ -82,6 +82,13 @@ class LogEvent(Representable):
     def __init__(self, message: str, level: LogLevel, origin: str, timestamp: float = None, extra: dict = None):
         self.message = message
         self.log_level = level
+        if len(origin) > max_origin_width:
+            origin = origin[:min_origin_left] + '...' + origin[-max_origin_width+min_origin_left+3:]
+            # dot = origin.find('.')
+            # if dot < 0:
+            #     origin = '...' + origin[-max_origin_width+3:]
+            # else:
+            #     origin = origin[:dot] + '...' + origin[-max_origin_width+3+dot:]
         self.origin = origin
         self.timestamp = time.time() if timestamp is None else timestamp
         self.extra = extra if extra else None
@@ -138,7 +145,14 @@ class LogOutput(LogObject):
 
 LogFormat = Callable[[LogEvent], str]
 
-default_format: LogFormat = '{0:T%Y%m%d:%H%M%S} {0.level:>5} {0.origin:40} {0.message}'.format
+max_origin_width = 40
+min_origin_left = 10
+
+default_format: LogFormat = (
+    '{0:T%Y%m%d:%H%M%S} {0.level:>5} {0.origin:' +
+    str(max_origin_width) +
+    '} {0.message}'
+).format
 
 
 class TextLogOutput(LogOutput):
@@ -200,6 +214,14 @@ class CompositeLogOutput(LogOutput):
 default_output = ConsoleLogOutput()
 
 
+def format_message(msg: str, args: tuple, extra: dict) -> str:
+    if extra:
+        message = msg.format(*args, **extra)
+    else:
+        message = msg.format(*args)
+    return message
+
+
 class Logger(LogOutput):
 
     __slots__ = ('owner', 'output', 'level')
@@ -232,11 +254,9 @@ class Logger(LogOutput):
 
     def log(self, msg: str, *args, level: LogLevel, source: type = None, timestamp: float = None, extra: dict = None):
         if level >= self.level:
-            if extra:
-                message = msg.format(*args, **extra)
-            else:
-                message = msg.format(*args)
+            message = format_message(msg, args, extra)
             origin = class_qname(source) if source else self.name
+            # origin = source.__module__ if source else self.name
             event = LogEvent(message, level, origin, timestamp, extra)
             self.output.write(event)
 

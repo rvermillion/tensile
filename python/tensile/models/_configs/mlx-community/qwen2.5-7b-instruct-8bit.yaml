@@ -1,5 +1,6 @@
 name: qwen2.5-7b-instruct-8bit
-kind: default
+org: mlx-community
+kind: language
 repo: hf:mlx-community/qwen2.5-7b-instruct-8bit
 model_type: qwen2
 dtype: bfloat16
@@ -9,6 +10,7 @@ quantization:
 lm:
   vocab_size: 152064
   hidden_dim: 3584
+  window_size: 131072
   layers:
     count: 28
     _:
@@ -54,3 +56,7 @@ lm:
 lm_head:
   kind: linear
   bias: false
+cache:
+  kind: sliding_window
+  window_size: 131072
+

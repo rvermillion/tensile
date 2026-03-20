@@ -1,16 +1,17 @@
 #  Copyright (c) 2025-2026. Richard Vermillion. All Rights Reserved.
+import enum
 
 import textwrap
 from pathlib import Path
 from typing import final
 
-from ...infra.types import Coercer, Setter, is_protocol
-from ..common import *
-from ...infra.util import join_str, name_function, noop, tie_call
+from ..infra.types import Coercer, Setter, is_protocol, missing
+from .common import *
+from ..infra.util import class_qname, join_str, name_function, noop, tie_call
 
 from .args import ModuleArgs
 from .context import ForwardContext
-from .instrument import Instrument
+from .instrument import Call, Instrument
 
 
 optional = object()
@@ -58,10 +59,11 @@ def is_leaf_module_entry(entry: TreeEntry) -> bool:
 
 
 is_leaf_module_traverser = tree.Traverser(include=is_leaf_module_entry)
+is_own_traverser = tree.Traverser(descend=not_module_entry)
 is_parameter_traverser = tree.Traverser(include=is_parameter_entry)
 is_own_parameter_traverser = tree.Traverser(include=is_parameter_entry, descend=not_module_entry)
 is_trainable_parameter_traverser = tree.Traverser(include=is_trainable_parameter_entry)
-is_own_trainable_parameter_traverser = tree.Traverser(include=is_parameter_entry, descend=not_module_entry)
+is_own_trainable_parameter_traverser = tree.Traverser(include=is_trainable_parameter_entry, descend=not_module_entry)
 is_module_traverser = tree.Traverser(include=is_module_entry)
 child_traverser = tree.Traverser(include=is_module_entry, descend=not_module_entry)
 
@@ -135,7 +137,7 @@ class ModuleField(meta.Field):
 
     @property
     def tree(self) -> bool | None:
-        return self.get_option('tree')
+        return self.get_option('tree', None)
 
     def build_coerce(self, spec: Spec) -> Optional[Coercer]:
         if module_built:
@@ -161,8 +163,9 @@ class ModuleField(meta.Field):
         poke = super().build_poke(spec)
         if module_built:
             name = self.name
+            in_tree = name[0] != '_' if self.tree is None else self.tree
             if cls := self.type.cls:
-                if self.tree is not False:
+                if in_tree:
                     if issubclass(cls, (Module, list, dict)):
                         def new_poke(this: Module, value: Any):
                             this.set_child(name, value)
@@ -203,6 +206,43 @@ class ModuleMeta(meta.ObjectMeta):
 ModuleTreeValue = Union[Array, 'Module']
 
 
+def alias_weights(parameters: dict, aliases: dict[str, str|None], copy: bool = True) -> dict:
+    for k, alias in aliases.items():
+        if tree.contains_path(parameters, k):
+            if copy:
+                copy = False
+                parameters = parameters.copy()
+            print(f'Aliasing {k} to {alias}')
+            if alias is None:
+                tree.pop_path(parameters, k)
+            else:
+                tree.move_path(parameters, k, alias)
+
+    return parameters
+
+
+class CallMode(enum.Enum):
+
+    eval = 0
+    train = 1
+    compiled = 2
+
+    def is_eval(self):
+        return self is CallMode.eval
+
+    def is_train(self):
+        return self is CallMode.train
+
+    def is_compiled(self):
+        return self is CallMode.compiled
+
+
+class ModuleParent(Protocol):
+
+    @property
+    def path(self) -> str: ...
+
+
 class Module(Object, tree.TreeNode[ModuleTreeValue]):
     """The Module base class that all modules should inherit from. It is a
     TreeNode and can participate in tree traversals and is smart about
@@ -215,8 +255,8 @@ class Module(Object, tree.TreeNode[ModuleTreeValue]):
     details about how this can be used.
     """
 
-    __slots__ = ('args', 'call', 'training', 'instrument',
-                 '_children', '_parent', '_name', '_no_grad', '_lifecycle', )
+    __slots__ = ('args', 'call', 'instrument', 'module_mode',
+                 '_children', '_parent', '_name', '_no_grad', '_lifecycle', 'weight_aliases')
 
     args: Annotated[ModuleArgs, field(
         doc='Module arguments that were used to construct the module.',
@@ -224,9 +264,9 @@ class Module(Object, tree.TreeNode[ModuleTreeValue]):
     call: Annotated[Callable[..., Any], field(
         doc='Module call function, executed when the module is called.',
     )]
-    training: Annotated[bool, field(
-        doc='Whether the module is in training mode or not.',
-        default=False,
+    module_mode: Annotated[CallMode, field(
+        doc='The mode the module is in, currently eval or train..',
+        default=CallMode.eval,
     )]
     instrument: Annotated[Optional['Instrument'], field(
         doc='An Instrument object that can be attached to the module for monitoring and profiling.',
@@ -240,7 +280,7 @@ class Module(Object, tree.TreeNode[ModuleTreeValue]):
         readonly=True,
         default_factory=dict,
     )]
-    _parent: Annotated[Optional['Module'], field(
+    _parent: Annotated[Optional[ModuleParent], field(
         doc='The parent Module of this Module.',
         default=None,
     )]
@@ -254,6 +294,11 @@ class Module(Object, tree.TreeNode[ModuleTreeValue]):
         readonly=True,
         default_factory=set,
     )]
+    weight_aliases: Annotated[Optional[dict[str, str]], field(
+        doc='A mapping of weight names to their aliases in the module',
+        tree=False,
+    )]
+
     keep_frozen: ClassVar[Annotated[bool, field(
         doc='Whether to keep frozen child nodes during initialization',
     )]] = False
@@ -268,6 +313,16 @@ class Module(Object, tree.TreeNode[ModuleTreeValue]):
         if isinstance(spec, dict):
             return self.Args.from_dict(spec)
         raise TypeError(f'Invalid args type: {type(spec).__name__}')
+
+    def _coerce_weight_aliases(self, spec: Any) -> dict[str, str]:
+        if isinstance(spec, dict):
+            return spec
+        raise TypeError(f'Invalid weight aliases type: {type(spec).__name__}')
+
+    def _lazy_weight_aliases(self) -> Optional[dict[str, str]]:
+        return self.default_weight_aliases
+
+    default_weight_aliases = None
 
     def set_lifecycle(self, lifecycle: Object.Lifecycle):
         self._lifecycle = lifecycle
@@ -285,7 +340,17 @@ class Module(Object, tree.TreeNode[ModuleTreeValue]):
             self.init_from_args(args)
 
     def init_from_args(self, args: ModuleArgs):
-        pass
+        weight_aliases = args.weight_aliases
+        if weight_aliases is not None:
+            self.weight_aliases = weight_aliases
+        for arg in self.auto_args:
+            val = args.get(arg, default=self.auto_arg_defaults.get(arg, missing))
+            if val is missing: continue
+            setattr(self, self.auto_arg_fields.get(arg, arg), val)
+
+    auto_args: ClassVar[set[str]] = set()
+    auto_arg_fields: ClassVar[dict[str, str]] = {}
+    auto_arg_defaults: ClassVar[dict[str, Any]] = {}
 
     @property
     def in_dim(self) -> int:
@@ -309,6 +374,14 @@ class Module(Object, tree.TreeNode[ModuleTreeValue]):
             return features,
         return ()
 
+    @property
+    def training(self) -> bool:
+        return self.module_mode == CallMode.train
+
+    @training.setter
+    def training(self, mode: bool):
+        self.module_mode = CallMode.train if mode else CallMode.eval
+
     def postinit(self, spec: Spec):
         if self.keep_frozen:
             # Freeze this model's parameters
@@ -316,33 +389,11 @@ class Module(Object, tree.TreeNode[ModuleTreeValue]):
         if self.call is None:
             self._initialize_call()
 
-    def _initialize_call(self):
+    def _module_mode_changed(self, mode: CallMode, old_mode: CallMode) -> None:
+        self._set_requires_grad(mode.is_train())
         self._configure_call(self._generate_call())
-
-    def _configure_call(self, call: Callable):
-        if instrument := self.instrument:
-            self.call = instrument.wrap_call(self, call, self.training)
-        else:
-            self.call = call
-
-    def _generate_call(self) -> Callable:
-        return self.train_call if self.training else self.eval_call
-
-    def _should_dropout(self, child: 'Module') -> bool:
-        return False
-
-    def _with_dropout(self, mod: Callable[..., Array], p: float = 0.1, d: int = 1) -> Callable[..., Array]:
-        if p == 0:
-            return mod
-        if isinstance(mod, Module) and not self._should_dropout(mod):
-                return mod
-        dropout = meta.for_qname('tensile.nn.layers.dropout.Dropout').coerce(p=p, d=d)
-        if not callable(dropout):
-            raise TypeError(f'Dropout must be callable, got {dropout}')
-
-        def call(*args, **kwargs):
-            return dropout(mod(*args, **kwargs))
-        return call
+        # if mode != old_mode:
+        #     self.info(f'Training mode changing from {old_mode} to {mode}')
 
     def _coerce_instrument(self, spec: Any) -> Optional[Instrument]:
         if spec is None: return None
@@ -352,7 +403,35 @@ class Module(Object, tree.TreeNode[ModuleTreeValue]):
         if instrument is not None or old_instrument is not None:
             self._configure_call(self._generate_call())
 
-    def set_instrument(self, instrument: Instrument | Callable, compose: bool = False) -> None:
+    def _initialize_call(self):
+        self._configure_call(self._generate_call())
+
+    def _configure_call(self, call: Callable):
+        if instrument := self.instrument:
+            self.call = instrument.instrument(self, call, self.module_mode)
+        else:
+            self.call = call
+
+    def _generate_call(self) -> Callable:
+        return self.get_call(self.module_mode)
+
+    def _should_dropout(self, child: 'Module') -> bool:
+        return False
+
+    # def _with_dropout(self, mod: Callable[..., Array], p: float = 0.1, d: int = 1) -> Callable[..., Array]:
+    #     if p == 0:
+    #         return mod
+    #     if isinstance(mod, Module) and not self._should_dropout(mod):
+    #             return mod
+    #     dropout = meta.for_qname('tensile.nn.layers.dropout.Dropout').coerce(p=p, d=d)
+    #     if not callable(dropout):
+    #         raise TypeError(f'Dropout must be callable, got {dropout}')
+    #
+    #     def call(*args, **kwargs):
+    #         return dropout(mod(*args, **kwargs))
+    #     return call
+
+    def set_instrument(self, instrument: Instrument.Like, compose: bool = False) -> None:
         if compose:
             instrument = Instrument.compose(self.instrument, Instrument.coerce(instrument))
         self.instrument = instrument
@@ -365,7 +444,20 @@ class Module(Object, tree.TreeNode[ModuleTreeValue]):
         else:
             self.instrument -= instrument
 
+    def get_call(self, mode: CallMode) -> Callable:
+        if mode.is_eval():
+            return self.eval_call
+        elif mode.is_train():
+            return self.train_call
+        elif mode.is_compiled():
+            return self.compiled_call
+        else:
+            raise ValueError(f'Invalid mode: {mode}')
+
     def train_call(self, *args, **kwargs):
+        return self.eval_call(*args, **kwargs)
+
+    def compiled_call(self, *args, **kwargs):
         return self.eval_call(*args, **kwargs)
 
     def eval_call(self, *args, **kwargs):
@@ -375,21 +467,21 @@ class Module(Object, tree.TreeNode[ModuleTreeValue]):
     def __call__(self, *args, **kwargs):
         return self.call(*args, **kwargs)
 
-    def _set_training_mode(self, mode: bool) -> None:
-        if self.training != mode:
-            self.training = mode
-            for child in self._children.values():
-                if ten.is_array(child):
-                    ten.require_grad(child, mode)
-            self._initialize_call()
-            # self.call = self.train_call if mode else self.eval_call
+    def _set_requires_grad(self, requires_grad: bool):
+        if requires_grad:
+            for path, param in tree.traverse_children(self, traverser=is_own_parameter_traverser):
+                ten.require_grad(param, path not in self._no_grad)
+        else:
+            for path, param in tree.traverse_children(self, traverser=is_own_parameter_traverser):
+                ten.require_grad(param, False)
 
-    def _training_changed(self, mode: bool, old_mode: bool) -> None:
-        pass
-        # if mode != old_mode:
-        #     self.info(f'Training mode changing from {old_mode} to {mode}')
+    # def _set_training_mode(self, mode: bool) -> None:
+    #     if self.training != mode:
+    #         self.training = mode
+    #         self._set_requires_grad(mode)
+    #         self._initialize_call()
 
-    def set_parent(self, parent: 'Module' = None, name: str = None) -> None:
+    def set_parent(self, parent: ModuleParent = None, name: str = None) -> None:
         if self._parent is None or parent is None:
             self._parent = parent
         if self._name is None or name is None:
@@ -404,6 +496,8 @@ class Module(Object, tree.TreeNode[ModuleTreeValue]):
         return f'{pp}.{nm}' if pp else nm
 
     def set_child(self, name: str, child: Any) -> None:
+        if self.module_mode.is_compiled():
+            raise RuntimeError('Cannot change a compiled module')
         def set_parent(m: Any, p: Module|None, n: str|None):
             if isinstance(m, Module):
                 m.set_parent(p, n)
@@ -423,7 +517,7 @@ class Module(Object, tree.TreeNode[ModuleTreeValue]):
                 set_parent(child, self, name)
                 self._children[name] = child
 
-    def train(self, mode: bool = True) -> Self:
+    def train(self, training: bool = True) -> Self:
         """Set the model in or out of training mode.
 
         Training mode only applies to certain layers. For example
@@ -437,7 +531,10 @@ class Module(Object, tree.TreeNode[ModuleTreeValue]):
             The module instance after updating the training mode.
         """
 
-        self.apply_to_modules(lambda _, m: m._set_training_mode(mode), spread=True)
+        def set_training_mode(mod: Module):
+            mod.training = training
+
+        self.apply_to_modules(set_training_mode, just_value=True)
 
         return self
 
@@ -584,7 +681,7 @@ class Module(Object, tree.TreeNode[ModuleTreeValue]):
     def _freeze(self, keys: list[str] = None, strict: bool = False):
         if keys is None:
             local_keys = []
-            for e in tree.traverse(self, traverser=is_own_parameter_traverser, force_descend=True):
+            for e in tree.traverse_children(self, traverser=is_own_parameter_traverser):
                 local_keys.append(e.step)
         else:
             local_keys = keys
@@ -628,10 +725,10 @@ class Module(Object, tree.TreeNode[ModuleTreeValue]):
             raise ValueError('args cannot be None')
 
     def build_proj(self, in_size: int, out_size: int, bias: bool = False, name: str = 'proj') -> 'Module':
-        proj_args = self.args.make_args(name, input_dims=in_size, output_dims=out_size, bias=bias)
-        return self.build_proj_from_args(proj_args)
+        proj_args = self.args.make_args(name, in_dim=in_size, out_dim=out_size, bias=bias)
+        return self.init_proj(proj_args)
 
-    def build_proj_from_args(self, args: ModuleArgs, kind: str = 'linear') -> 'Module':
+    def init_proj(self, args: ModuleArgs, kind: str = 'linear') -> 'Module':
         return Module.coerce(kind=kind, args=args)
 
     def items(self) -> Iterable[tuple[str, Any]]:
@@ -653,7 +750,7 @@ class Module(Object, tree.TreeNode[ModuleTreeValue]):
         """Recursively return all the :class:`mlx.core.array` members of this Module
         as a dict of dicts and lists."""
         if own:
-            return tree.filter(self, traverser=is_own_parameter_traverser, force_descend=True)
+            return tree.filter_children(self, traverser=is_own_parameter_traverser)
         else:
             return tree.filter(self, traverser=is_parameter_traverser)
 
@@ -661,13 +758,13 @@ class Module(Object, tree.TreeNode[ModuleTreeValue]):
         """Recursively return all the non frozen :class:`mlx.core.array` members of
         this Module as a dict of dicts and lists."""
         if own:
-            return tree.filter(self, traverser=is_own_trainable_parameter_traverser, force_descend=True)
+            return tree.filter_children(self, traverser=is_own_trainable_parameter_traverser)
         else:
             return tree.filter(self, traverser=is_trainable_parameter_traverser)
 
     def children(self) -> tree.Tree['Module']:
         """Return the direct descendants of this Module instance."""
-        return tree.filter(self, traverser=child_traverser, force_descend=True)
+        return tree.filter_children(self, traverser=child_traverser)
 
     def get_child(self, path: str) -> Any:
         return tree.get(self, path)
@@ -702,6 +799,11 @@ class Module(Object, tree.TreeNode[ModuleTreeValue]):
         if model is None: model = self
         return self.ForwardContext.coerce(model=model, **kwargs)
 
+    def subinstrument(self, name: str, call: Call, mode: CallMode) -> Call:
+        if instrument := self.instrument:
+            return instrument.subinstrument(name, self, call, mode)
+        return call
+
     def update(self, parameters: dict, strict: bool = True) -> Self:
         """Replace the parameters of this Module with the provided ones in the
         dict of dicts and lists.
@@ -721,9 +823,10 @@ class Module(Object, tree.TreeNode[ModuleTreeValue]):
                 subset of the module's parameters. Default: ``True``.
         Returns:
             The module instance after updating the parameters.
+            :param remap:
         """
 
-        for a, b in tree.join(self, parameters, include=is_parameter_entry):
+        for a, b in tree.join(self, parameters, traverser=is_parameter_traverser):
             new_value = b.value
             if ten.is_array(new_value):
                 a.replace(new_value)
@@ -734,10 +837,36 @@ class Module(Object, tree.TreeNode[ModuleTreeValue]):
 
         return self
 
+    def alias_weights(self, parameters: dict) -> dict:
+        if aliases := self.weight_aliases:
+            copy = True
+            for k, alias in aliases.items():
+                if tree.contains_path(parameters, k):
+                    if copy:
+                        copy = False
+                        parameters = parameters.copy()
+                    self.info('Remapping {} to {}', k, alias)
+                    tree.move_path(parameters, k, alias)
+
+        return parameters
+
+    def remap_weights(self, parameters: dict) -> dict:
+
+        parameters = self.alias_weights(parameters)
+
+        for a, b in tree.join_children(self, parameters, traverser=child_traverser):
+            child = a.value
+            if isinstance(child, Module):
+                b.replace(child.remap_weights(b.value))
+            else:
+                raise ValueError(f"Invalid type: {type(child).__name__}")
+        return parameters
+
     def load_weights(
         self,
         file_or_weights: str|Path|list[tuple[str, ten.Array]],
         strict: bool = True,
+        remap: bool = True,
     ) -> 'Module':
         """
         Update the model's weights from a ``.npz``, a ``.safetensors`` file, or a list.
@@ -815,20 +944,29 @@ class Module(Object, tree.TreeNode[ModuleTreeValue]):
         else:
             weights = file_or_weights
 
+        params = tree.unflatten(weights)
+        if remap:
+            params = self.remap_weights(params)
+
         if strict:
-            new_weights = dict(weights)
+            new_weights = tree.flatdict(params) if remap else dict(weights)
+
             curr_weights = tree.flatdict(self.parameters())  #, destination={})
+
+            message = ''
             if extras := (new_weights.keys() - curr_weights.keys()):
                 num_extra = len(extras)
-                extras = ",\n".join(sorted(extras))
+                extras = ",\n  ".join(sorted(extras))
                 # ten.eval(new_weights, curr_weights)
-                raise ValueError(
-                    f"Received {num_extra} parameters not in model: \n{extras}."
-                )
+                message += f"Received {num_extra} parameters not in model:\n  {extras}.\n"
             if missing := (curr_weights.keys() - new_weights.keys()):
                 num_missing = len(missing)
-                missing = ",\n".join(sorted(missing))
-                raise ValueError(f"Missing {num_missing} parameters: \n{missing}.")
+                missing = ",\n  ".join(sorted(missing))
+                message += f"Missing {num_missing} parameters that are in model:\n  {missing}.\n"
+
+            if message:
+                raise ValueError(message)
+
             for k, v in curr_weights.items():
                 v_new = new_weights[k]
                 if not ten.is_array(v_new):
@@ -841,9 +979,9 @@ class Module(Object, tree.TreeNode[ModuleTreeValue]):
                         f"Expected shape {v.shape} but received "
                         f"shape {v_new.shape} for parameter {k}"
                     )
+        if len(params) != 0:
+            self.update(params, strict=True)
 
-        if len(weights) != 0:
-            self.update(tree.unflatten(weights), strict=False)
         return self
 
     def migrate(self, **kwargs) -> Self:
@@ -889,19 +1027,27 @@ class Module(Object, tree.TreeNode[ModuleTreeValue]):
     @classmethod
     def from_args(cls, args: ModuleArgs = None, **kwargs) -> Self:
         if args is None:
-            args = cls.Args.from_dict(kwargs)
-        elif kwargs:
-            args = cls.Args.combine_args(args, kwargs)
+            kind = kwargs.get('kind')
+        else:
+            kind = args.kind
 
-        if kind := args.kind:
-            # if cls.handles_kind(kind):
-            #     pass
-            # else:
-            return cls.meta.coerce(args=args, kind=kind)
+        if kind:
+            impl = cls.meta.get_impl_for_kind(kind)
+            if impl is None:
+                impl = cls
+        else:
+            impl = cls
 
-        impl = cls.refine_implementation(args)
+        if args is None:
+            args = impl.Args.from_dict(kwargs)
+            kwargs = {}
+        else:
+            if not isinstance(args, impl.Args):
+                args = impl.Args.from_args(args)
 
-        return impl(args=args)
+        impl = impl.refine_implementation(args)
+
+        return impl(args=args, **kwargs)
 
     @classmethod
     def handles_kind(cls, kind: str) -> bool:
@@ -930,7 +1076,10 @@ class Module(Object, tree.TreeNode[ModuleTreeValue]):
 
     @classmethod
     def _coerce_from_str(cls, spec: str, /, **kwargs):
-        return cls.from_args(cls.Args.from_dict({}), kind=spec, **kwargs)
+        kwargs.setdefault('kind', spec)
+        return cls.from_args(cls.Args.from_dict(kwargs))
+
+    Mode: ClassVar[type[CallMode]] = CallMode
 
     # The forward context that this module uses. Subclasses can override this.
     ForwardContext: ClassVar[type[ForwardContext]] = ForwardContext
@@ -973,65 +1122,133 @@ class CompiledModule(Module):
     to be regenerated on the next call.
     """
 
-    __slots__ = ('train_call', 'eval_call')
+    __slots__ = ('calls',)
 
-    train_call: Callable
-    eval_call: Callable
+    calls: Annotated[dict[CallMode, Callable], field(
+        default_factory=dict,
+        tree=False,
+    )]
 
-    def _initialize_call(self):
-        self.compile(self.training)
-
-    def _generate_call(self) -> Callable:
-        def call(*args, **kwargs):
-            self.compile(self.training)
-            return self.call(*args, **kwargs)
-        return call
+    def _module_mode_changed(self, mode: CallMode, old_mode: CallMode) -> None:
+        super()._module_mode_changed(mode, old_mode)
+        if old_mode.is_compiled():
+            self.calls.pop(old_mode, None)
 
     def _instrument_changed(self, instrument: 'Instrument', old_instrument: 'Instrument'):
         if instrument is not None or old_instrument is not None:
             self.call = self._generate_call()
 
-    def _lazy_train_call(self) -> Callable:
-        self.compile(train=True)
-        return self.train_call
+    # def _initialize_call(self):
+    #     self.compile(self.mode)
+    #
+    # def _generate_call(self) -> Callable:
+    #     def call(*args, **kwargs):
+    #         call = self.compile(self.module_mode)
+    #         return call(*args, **kwargs)
+    #     return call
 
-    def _lazy_eval_call(self) -> Callable:
-        self.compile(train=False)
-        return self.eval_call
+    @property
+    def train_call(self) -> Callable:
+        return self.get_call(CallMode.train)
 
-    def compile(self, train: bool = None):
-        if train is None: train = self.training
-        mode = 'train' if train else 'eval'
-        self.debug('compiling {} call for {}', mode, self)
+    @property
+    def eval_call(self) -> Callable:
+        return self.get_call(CallMode.eval)
+
+    @property
+    def compiled_call(self) -> Callable:
+        return self.get_call(CallMode.compiled)
+
+    def get_call(self, mode: CallMode) -> Callable:
+        if call := self.calls.get(mode):
+            return call
+        return self.compile(mode)
+
+    def compile(self, mode: CallMode = None) -> Callable:
+        if mode is None: mode = self.module_mode
+        self.debug('compiling {} call for {}', mode.name, self)
         try:
-            if train:
-                self.train_call = self.build_train_call()
-                if self.training:
-                    self._configure_call(self.train_call)
-            else:
-                self.eval_call = self.build_eval_call()
-                if not self.training:
-                    self._configure_call(self.eval_call)
+            call = self.build_call(mode)
+            call = name_function(call, f'{class_qname(self.__class__)}[{self.path or "root"}].{mode.name}_call')
+            self.calls[mode] = call
+            if self.module_mode == mode:
+                self._configure_call(call)
             self.debug('compiled {} call for {}', mode, self)
+            return call
         except Exception as e:
             self.error('failed to compile {} call for {}: {}', mode, self, e)
             raise e
 
-    def build_call(self, train: bool = False, **options) -> Callable:
-        raise NotImplementedError()
-
-    def build_train_call(self) -> Callable:
-        call = self.build_call(True)
-        return name_function(call, self.path + '.train_call')
-
-    def build_eval_call(self) -> Callable:
-        call = self.build_call(False)
-        return name_function(call, self.path + '.eval_call')
+    def build_call(self, mode: Module.Mode, **options) -> Callable:
+        raise NotImplementedError(type(self))
 
     @staticmethod
     def recompile(module: 'CompiledModule', value: Any, old: Any):
         if value != old and module.get_lifecycle().is_ready():
+            module.calls.clear()
             module._configure_call(module._generate_call())
+
+
+class Functional(Protocol):
+
+    def __call__(self, x: Array, /) -> Array: ...
+
+
+class FunctionModule(CompiledModule):
+
+    __slots__ = ()
+
+    if TYPE_CHECKING:
+
+        def build_call(self, mode: Module.Mode, **options) -> Functional: ...
+
+        # noinspection PyFinal
+        def __call__(self, x: Array, /) -> Array: ...
+
+    @classmethod
+    def from_args(cls, args: ModuleArgs = None, **kwargs) -> Self:
+        if cls is FunctionModule:
+            mod = Module.from_args(args, **kwargs)
+        else:
+            mod = super().from_args(args, **kwargs)
+        if isinstance(mod, cls):
+            return mod
+        cls.class_warn('Got something other than a {} from Module.from_args: {}', cls, mod)
+        # noinspection PyTypeChecker
+        return mod
+
+class WrapperModule(CompiledModule):
+    r"""A module that normalizes its inputs."""
+
+    __slots__ = ('body',)
+
+    body: Annotated[Module, field(
+        doc="The module to wrap.",
+    )]
+
+    def init_from_args(self, args: ModuleArgs):
+        super().init_from_args(args)
+
+        self.body = self.build_body(args)
+
+    def build_body(self, args: ModuleArgs) -> Module:
+        return Module.from_args(args.get('body'))
+
+    def alias_weights(self, parameters: dict) -> dict:
+        names = set(parameters.keys()) - self.unwrapped_keys
+        if names:
+            parameters = parameters.copy()
+            for name in names:
+                self.info('Remapping {} to body.{}', name, name)
+                tree.move_path(parameters, name, 'body.' + name)
+
+        return parameters
+
+    def _unwrap_object(self) -> Any:
+        return self.body
+
+
+    unwrapped_keys = {'body'}
 
 
 class DelegatingModule(CompiledModule):
@@ -1040,9 +1257,9 @@ class DelegatingModule(CompiledModule):
 
     delegate: Module
 
-    def build_call(self, train: bool = False, **options) -> Callable:
+    def build_call(self, mode: CompiledModule.Mode, **options) -> Callable:
         delegate = self.delegate
-        return self.wrap_delegate_call(delegate.train_call if train else delegate.eval_call)
+        return self.wrap_delegate_call(delegate.get_call(mode))
 
     def wrap_delegate_call(self, call: Callable) -> Callable:
         return call
@@ -1056,12 +1273,4 @@ class DelegatingModule(CompiledModule):
             return delegate
         raise TypeError(f'Cannot unwrap a {cls} from a {type(delegate)}')
 
-
-
-__all__ = [
-    'DelegatingModule',
-    'Module',
-    'ModuleArgs',
-    'CompiledModule',
-]
 

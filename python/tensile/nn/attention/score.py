@@ -17,9 +17,10 @@ class AttentionScores(RootObject):
     sumexp: Array     # (B, *H, Q, 1)
     values: Array     # (B, *H, Q, D_v)
 
-    def __init__(self, queries: Array, qs: slice, v_dim: int, dtype: DType = ten.float32):
+    def __init__(self, queries: Array, qs: slice, v_dim: int, dtype: DType = None):
         # We initialize the max, sum and values. Broadcasting will do its magic when the first logits and values
         # are added to the accumulator.
+        if dtype is None: dtype = queries.dtype
         self.queries = queries
         self.qs = qs
         self.max = ten.array(-ten.inf, dtype=dtype)
@@ -216,7 +217,7 @@ class GatedAttentionScorer(CompiledModule):
         self.gate_dim = args.get('gate_dim', default=16)
         self.extra_gate = args.get('extra_gate', default=True)
 
-    def build_call(self, train: bool = False, **options) -> AttentionScorer:
+    def build_call(self, mode: CompiledModule.Mode, **options) -> AttentionScorer:
         if self.extra_gate:
 
             # noinspection PyUnusedLocal
@@ -257,6 +258,4 @@ class GatedAttentionScorer(CompiledModule):
 __all__ = [
     'AttentionScores',
     'AttentionScoresFactory',
-    'regular_attention',
-    'tile_attention',
 ]

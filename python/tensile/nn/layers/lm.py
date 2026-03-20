@@ -1,11 +1,10 @@
 #  Copyright (c) 2025-2026. Richard Vermillion. All Rights Reserved.
 
-# import patchlm.cache
 
 from ..common import *
-from ..module import ForwardContext, Module, CompiledModule
-from ...nn.attention.mask import AttentionMasker, create_causal_mask, make_additive_masker
-from ..cache import ModelCache, KVCache
+from ..module import FunctionModule, Module, CompiledModule
+from ..attention.context import AttentionContext
+from ..cache import ModelCache
 from ..quantization import QuantizableModuleArgs
 from .embedding import Embedding
 from .normalization import Normalization
@@ -14,8 +13,9 @@ from .transformer import DecoderLayer
 
 class LMArgs(QuantizableModuleArgs):
     model_type: Annotated[str, 'Model type identifier']
-    hidden_size: int
+    hidden_dim: int
     vocab_size: int
+    window_size: Optional[int] = None
     tokenizer: Optional[str] = None
 
     embedding: Embedding.Args = None
@@ -25,49 +25,20 @@ class LMArgs(QuantizableModuleArgs):
     _config_default_step = 'model'
 
 
-@provides(ForwardContext, 'lm')
-class LMContext(ForwardContext):
-
-    __slots__ = ('mask', 'cache', 'layer_cache', 'call')
-
-    mask: Annotated[Optional[Array], field(
-        doc='The mask to apply to the input'
-    )]
-    cache: Annotated[Optional[ModelCache], field(
-        doc='The cache to use for this forward pass'
-    )]
-    layer_cache: Annotated[Optional[KVCache], field(
-        doc='The kv cache for the current layer to use for this forward pass'
-    )]
-
-    def get_mask(self, n: int, dtype: DType = ten.float32) -> Optional[Array]:
-        if n == 1:
-            return None
-        mask = self.mask
-        if mask is not None and mask.dtype == dtype:
-            if n <= mask.shape[0]:
-                # reuse a portion of the mask if we can
-                return mask[:n, :n]
-        mask = create_causal_mask(n, dtype=dtype)
-        self.mask = mask
-        return mask
-
-    def get_masker(self, n: int, dtype: DType = ten.float32) -> Optional[AttentionMasker]:
-        if n == 1: return None
-        return make_additive_masker(self.get_mask(n, dtype=dtype))
-
-
 @provides(Module, "lm")
-class LM(CompiledModule):
+class LM(FunctionModule):
 
-    __slots__ = ('embed_tokens', 'layers', 'norm', 'vocab_size',
-                 'num_hidden_layers', 'hidden_size')
+    __slots__ = ('embed_tokens', 'layers', 'norm', 'vocab_size', 'window_size',
+                 'num_hidden_layers', 'hidden_dim')
 
     args: Annotated[LMArgs, field(ignore=True)]
 
     vocab_size: int
+    window_size: Annotated[int, field(
+        default=0
+    )]
     num_hidden_layers: int
-    hidden_size: int
+    hidden_dim: int
 
     embed_tokens: Module
     layers: list[DecoderLayer]
@@ -77,7 +48,8 @@ class LM(CompiledModule):
         super().init_from_args(args)
 
         self.vocab_size = args.vocab_size
-        self.hidden_size = args.hidden_size
+        self.hidden_dim = args.hidden_dim
+        self.window_size = args.window_size or 0
         self.num_hidden_layers = args.get_first('layers.count', 'num_hidden_layers')  #args.num_hidden_layers
 
         assert self.vocab_size > 0
@@ -90,7 +62,7 @@ class LM(CompiledModule):
     def build_embed_tokens(self, args: LMArgs) -> Module:
         embedding_args = args.embedding.set_defaults(
             num_embeddings=self.vocab_size,
-            output_dim=self.hidden_size,
+            output_dim=self.hidden_dim,
         )
         return Embedding.from_args(embedding_args)
 
@@ -106,47 +78,55 @@ class LM(CompiledModule):
 
     def build_norm(self, args: LMArgs) -> Module:
         norm_args = args.norm.set_defaults(
-            dims=self.hidden_size,
+            dims=self.hidden_dim,
             kind='rms',
         )
         return Normalization.from_args(norm_args)
 
     def build_cache(self) -> Optional[ModelCache]:
-        if self.training: return None
         return meta.coerce(ModelCache, model=self)
 
-    def build_call(self, train: bool = False, **options) -> Callable:
+    def build_call(self, mode: CompiledModule.Mode, **options) -> Callable:
+        embed_tokens = self.embed_tokens
+        layers = self.layers
+        norm = self.norm
+        if mode.is_train():
+            def build_cache():return None
+        else:
+            build_cache = self.build_cache
 
         def call(inputs: Array) -> Array:
-            ten.debug_eval(inputs)
-            h = self.embed_tokens(inputs)
+            # ten.debug_eval(inputs)
+            h = embed_tokens(inputs)
 
-            if ctx := LMContext.get_current():
+            if ctx := AttentionContext.get_current():
                 cache = ctx.cache
 
                 if cache is None:
-                    cache = ctx.cache = self.build_cache()
+                    cache = ctx.cache = build_cache()
 
             else:
-                ctx = LMContext(model=self)
+                ctx = AttentionContext(model=self)
                 cache = None
 
             with ctx.push():
 
                 if cache is None:
-                    for layer in self.layers:
+                    for layer in layers:
                         h = layer(h)
                 else:
-
-                    for layer, cache_layer in zip(self.layers, cache.layers):
+                    for layer, cache_layer in zip(layers, cache.layers):
                         ctx.layer_cache = cache_layer
                         h = layer(h)
 
-                out = self.norm(h)
-
+                out = norm(h)
 
             return out
         return call
+
+    def build_forward_context(self, model: 'Module' = None, **kwargs) -> AttentionContext:
+        if model is None: model = self
+        return AttentionContext.coerce(model=model, window_size=self.window_size, **kwargs)
 
     @property
     def in_dim(self) -> int:
@@ -154,9 +134,9 @@ class LM(CompiledModule):
 
     @property
     def out_dim(self) -> int:
-        return self.hidden_size
+        return self.hidden_dim
 
-    ForwardContext = LMContext
+    ForwardContext = AttentionContext
 
 
 meta.for_class(LM).configure_registry(

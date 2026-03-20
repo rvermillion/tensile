@@ -84,7 +84,7 @@ def as_type(a: Any, dtype: DType) -> Array:
 from torch import (
     tensor,
     zeros, zeros_like, ones, ones_like, full, full_like, empty, empty_like,
-    arange, concatenate, reshape,
+    arange, reshape,
     abs, square, sqrt, exp, log, expm1, sin, cos, tan, sigmoid,
     median, std, var, quantile,
     pi,
@@ -97,6 +97,7 @@ from torch import (
     floor, floor_divide,
     sort, where,
     take, take_along_dim,
+    gather,
     conv1d, conv2d, conv3d,
     swapaxes, transpose,
     as_strided,
@@ -146,6 +147,9 @@ def parameter(x: Array) -> Array:
 
 def detach(a: Array) -> Array:
     return a.detach()
+
+
+stop_gradient = detach
 
 
 def require_grad(a: Array, grad: bool = True) -> Array:
@@ -290,6 +294,10 @@ def dequantize(x: Array, scales: Array = None, biases: Array = None,
     return w.reshape(*w.shape[:-2], logical_dim).to(scales.dtype)
 
 
+def split(x: Array, indices_or_sections: int|Sequence[int], axis: int = 0) -> Sequence[Array]:
+    return torch.split(x, indices_or_sections, dim=axis)
+
+
 @contextlib.contextmanager
 def stream(s: Stream):
     yield s
@@ -298,8 +306,15 @@ def stream(s: Stream):
 C = TypeVar('C', bound=Callable)
 
 
-def compile(**kwargs) -> Callable[[C], C]:
-    return torch.compile(**kwargs)
+def compile(shapeless: bool = False, **kwargs) -> Callable[[C], C]:
+    return torch.compile(dynamic=shapeless, **kwargs)
+
+
+def concatenate(arrays: list[Array]|tuple[Array, ...], axis: int = 0) -> Array:
+    return torch.cat(arrays, dim=axis)
+
+
+concat = concatenate
 
 # # noinspection PyShadowingNames
 # def zeros(shape: Shape, dtype: DTypeLike = ..., *args, **kwargs) -> Array: ...
@@ -445,6 +460,41 @@ def is_monotonic(vals: TorchArray, strict: bool = False) -> bool:
             is_monotonic_test(vals, torch.greater if strict else torch.greater_equal))
 
 
+def gather_mm(a: Array, b: Array, /, lhs_indices: Array = None, rhs_indices: Array = None, *, sorted_indices: bool = False, **kwargs) -> Array:
+    """
+    x:       (*I, J)   - input tokens
+    weights: (X, J, K) - per-expert weight matrices
+    indices: (|I|,) - which expert each token is routed to [0..X)
+    returns: (*I, K)
+    """
+    if lhs_indices is not None:
+        raise NotImplementedError("gather_mm does not support lhs_indices yet")
+    if rhs_indices is None:
+        raise ValueError("rhs_indices must be specified")
+
+    orig_shape = a.shape
+    bshape = b.shape
+
+    assert orig_shape[-1] == bshape[-2], "Incompatible shapes"
+
+    a = a.reshape(-1, orig_shape[-2], orig_shape[-1])
+
+    new_shape = a.shape
+
+    assert new_shape[0] == rhs_indices[0], "Right hand side indices do not match input tensor size"
+
+    output = torch.zeros((new_shape[0], new_shape[1], bshape[-1]), dtype=a.dtype)
+
+    for i in range(bshape[0]):
+        mask = rhs_indices == i
+        if not torch.any(mask):
+            continue
+        a_i = a[mask]                    # (n_i, D_in)
+        output[mask] = a_i @ b[i]    # (n_i, D_out)
+
+    output = output.reshape(*orig_shape[:-1], bshape[-1])
+
+    return output
 
 def new_stream(device) -> Stream:
     return None

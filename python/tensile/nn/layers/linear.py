@@ -1,23 +1,25 @@
 #  Copyright (c) 2025-2026. Richard Vermillion. All Rights Reserved.
+from typing import overload
 
 import math
 
+from .normalization import NormedModule
 from ..common import *
-from ..module import CompiledModule, Module, ModuleArgs
+from ..module import CompiledModule, FunctionModule, Module, ModuleArgs
 from ..init import Initializer, Initializers
 from ..activations import Activation
 from ..quantization import QuantizableModuleArgs
 
 
 class LinearArgs(QuantizableModuleArgs):
-    input_dims: int
-    output_dims: int
+    in_dim: int
+    out_dim: int
     bias: bool = True
+    num_experts: int = 1
     initialize: Initializer = None
 
 
-@meta.provides(Module, 'linear')
-class Linear(CompiledModule):
+class BaseLinear(CompiledModule):
     r"""Applies an affine transformation to the input.
 
     Concretely:
@@ -27,14 +29,14 @@ class Linear(CompiledModule):
         y = x W^\top + b
 
     where:
-    where :math:`W` has shape ``[output_dims, input_dims]`` and :math:`b` has shape ``[output_dims]``.
+    where :math:`W` has shape ``[out_dim, in_dim]`` and :math:`b` has shape ``[out_dim]``.
 
     The values are initialized from the uniform distribution :math:`\mathcal{U}(-{k}, {k})`,
-    where :math:`k = \frac{1}{\sqrt{D_i}}` and :math:`D_i` is equal to ``input_dims``.
+    where :math:`k = \frac{1}{\sqrt{D_i}}` and :math:`D_i` is equal to ``in_dim``.
 
     Args:
-        input_dims (int): The dimensionality of the input features
-        output_dims (int): The dimensionality of the output features
+        in_dim (int): The dimensionality of the input features
+        out_dim (int): The dimensionality of the output features
         bias (bool, optional): If set to ``False`` then the layer will
           not use a bias. Default is ``True``.
     """
@@ -53,50 +55,130 @@ class Linear(CompiledModule):
     def init_from_args(self, args: LinearArgs) -> None:
         super().init_from_args(args)
 
+        self.weight, self.bias = self.init_weight_and_bias(args)
+
+    def init_weight_and_bias(self, args: LinearArgs) -> tuple[Array, Optional[Array]]:
+        return self.init_weight(args), self.init_bias(args)
+
+    def init_weight(self, args: LinearArgs) -> Array:
         init = args.initialize or Initializers.uniform
-        input_dims = args.input_dims
-        output_dims = args.output_dims
-        scale = math.sqrt(1.0 / input_dims)
+        in_dim = args.in_dim
+        out_dim = args.out_dim
+        scale = math.sqrt(1.0 / in_dim)
 
-        self.weight = init((output_dims, input_dims), scale=scale)
+        return init((out_dim, in_dim), scale=scale)
+
+    def init_bias(self, args: LinearArgs) -> Optional[Array]:
         if args.bias:
-            self.bias = init((output_dims, ), scale=scale)
-        else:
-            self.bias = None
+            init = args.initialize or Initializers.uniform
+            in_dim = args.in_dim
+            out_dim = args.out_dim
+            scale = math.sqrt(1.0 / in_dim)
+            return init((out_dim, ), scale=scale)
+        return None
 
-    def build_call(self, train: bool = False, **options) -> Callable:
-        if self.bias is None:
-            def call(x: Array) -> Array:
-                return ten.matmul(x, self.weight.T)
+    def build_call(self, mode: CompiledModule.Mode, **options) -> Callable:
+        if mode.is_compiled():
+            # In compiled mode, we can close over the parameters
+
+            weight_t = self.weight.T
+
+            if self.bias is None:
+                def call(x: Array) -> Array:
+                    return ten.matmul(x, weight_t)
+            else:
+                bias = self.bias
+
+                def call(x: Array) -> Array:
+                    return ten.addmm(bias, x, weight_t)
         else:
-            def call(x: Array) -> Array:
-                return ten.addmm(self.bias, x, self.weight.T)
+            if self.bias is None:
+                def call(x: Array) -> Array:
+                    return ten.matmul(x, self.weight.T)
+            else:
+                # noinspection PyTypeChecker
+                def call(x: Array) -> Array:
+                    return ten.addmm(self.bias, x, self.weight.T)
 
         return call
 
     @property
     def in_dim(self) -> int:
-        return 0 if (w := self.weight) is None else w.shape[1]
+        return 0 if (w := self.weight) is None else w.shape[-1]
 
     @property
     def out_dim(self) -> int:
-        return 0 if (w := self.weight) is None else w.shape[0]
+        return 0 if (w := self.weight) is None else w.shape[-2]
 
     def _extra_structure(self):
         return (
-            f"input_dims={self.in_dim}, "
-            f"output_dims={self.out_dim}, "
+            f"in_dim={self.in_dim}, "
+            f"out_dim={self.out_dim}, "
             f"bias={self.bias is not None}"
         )
 
     Args = LinearArgs
 
+
+@meta.provides(Module, 'linear')
+class Linear(BaseLinear, FunctionModule):
+
+    __slots__ = ()
+
     @classmethod
-    def refine_implementation(cls, args: LinearArgs) -> type[Self]:
-        return QuantizedLinear if args.quantization.group_size > 0 else cls
+    def refine_implementation(cls, args: LinearArgs) -> type['Linear']:
+        if args.quantization.group_size > 0:
+            return QuantizedLinear
+        return cls
+
+    @overload
+    @classmethod
+    def fuse(cls, a: 'Linear', b: 'Linear') -> Callable[[Array], tuple[Array, Array]]: ...
+
+    @overload
+    @classmethod
+    def fuse(cls, a: 'Linear', b: 'Linear', c: 'Linear') -> Callable[[Array], tuple[Array, Array, Array]]: ...
+
+    @classmethod
+    def fuse(cls, *linears: 'Linear') -> Callable[[Array], tuple[Array, ...]]:
+        if len(linears) <= 1:
+            raise ValueError("Cannot fuse less than two linear layers")
+
+        in_dim = linears[0].in_dim
+        if any(lin.in_dim != in_dim for lin in linears[1:]):
+            raise ValueError(f"Cannot fuse linear layers with different in_dims: " +
+                             ', '.join(str(lin.in_dim) for lin in linears))
+
+        if any(lin.bias is not None for lin in linears):
+            if not all(lin.bias is not None for lin in linears):
+                raise ValueError("Cannot fuse linear layers with biases")
+            # noinspection PyTypeChecker
+            bias = ten.concatenate([lin.bias for lin in linears], axis=0)
+        else:
+            bias = None
+
+        split_pos = 0
+        splits = []
+        for lin in linears[:-1]:
+            split_pos += lin.weight.shape[0]
+            splits.append(split_pos)
+
+        weight = ten.concatenate([lin.weight for lin in linears], axis=0)
+
+        if bias is None:
+            def fused_linear(x: Array) -> tuple[Array, ...]:
+                y = ten.matmul(x, weight.T)
+                return ten.split(y, splits, axis=-1)
+        else:
+            def fused_linear(x: Array) -> tuple[Array, ...]:
+                y = ten.addmm(bias, x, weight.T)
+                return ten.split(y, splits, axis=-1)
+
+        return fused_linear
 
 
-class QuantizedLinear(CompiledModule):
+@provides(Linear, 'quantized')
+class QuantizedLinear(Linear):
     """Applies an affine transformation to the input using a quantized weight matrix.
 
     It is the quantized equivalent of :class:`mlx.nn.Linear`. For now its
@@ -107,8 +189,8 @@ class QuantizedLinear(CompiledModule):
     convert linear layers to :obj:`QuantizedLinear` layers.
 
     Args:
-        input_dims (int): The dimensionality of the input features.
-        output_dims (int): The dimensionality of the output features.
+        in_dim (int): The dimensionality of the input features.
+        out_dim (int): The dimensionality of the output features.
         bias (bool, optional): If set to ``False`` then the layer will not use
             a bias. Default: ``True``.
         group_size (int, optional): The group size to use for the quantized
@@ -117,16 +199,8 @@ class QuantizedLinear(CompiledModule):
             See :func:`~mlx.core.quantize`. Default: ``4``.
     """
 
-    __slots__ = ('weight', 'bias', 'scales', 'biases', 'group_size', 'mode', 'bits')
+    __slots__ = ('scales', 'biases', 'group_size', 'mode', 'bits')
 
-    weight: Annotated[Array, field(
-        doc="The learnable weights of the layer.",
-        parameter=False,
-    )]
-    bias: Annotated[Optional[Array], field(
-        doc="The learnable bias of the layer.",
-        parameter=False,
-    )]
     scales: Annotated[Array, field(
         doc="The learnable scales of the layer.",
         parameter=False,
@@ -153,16 +227,16 @@ class QuantizedLinear(CompiledModule):
     def init_from_args(self, args: LinearArgs) -> None:
         super().init_from_args(args)
 
-        init = args.initialize or Initializers.uniform
-        input_dims = args.input_dims
-        output_dims = args.output_dims
-        scale = math.sqrt(1.0 / input_dims)
-
-        weight = init((output_dims, input_dims), scale=scale)
-        if args.bias:
-            self.bias = init((output_dims, ), scale=scale)
-        else:
-            self.bias = None
+        # init = args.initialize or Initializers.uniform
+        # in_dim = args.in_dim
+        # out_dim = args.out_dim
+        # scale = math.sqrt(1.0 / in_dim)
+        #
+        # weight = init((out_dim, in_dim), scale=scale)
+        # if args.bias:
+        #     self.bias = init((out_dim, ), scale=scale)
+        # else:
+        #     self.bias = None
 
         quant = args.quantization
 
@@ -175,59 +249,24 @@ class QuantizedLinear(CompiledModule):
         self.mode = quant.get("mode", "affine")
 
         # Initialize the quantized weight
-        self.weight, self.scales, *biases = ten.quantize(weight, self.group_size, self.bits, mode=self.mode)
+        self.weight, self.scales, *biases = ten.quantize(self.weight, self.group_size, self.bits, mode=self.mode)
         self.biases = biases[0] if biases else None
 
     @property
-    def input_dims(self) -> int:
+    def in_dim(self) -> int:
         return self.weight.shape[1] * (32 // self.bits)
 
     @property
-    def output_dims(self) -> int:
+    def out_dim(self) -> int:
         return self.weight.shape[0]
 
-    @property
-    def in_dim(self) -> int:
-        return self.input_dims
+    def _extra_structure(self):
+        return super()._extra_structure() + f"group_size={self.group_size}, bits={self.bits}"
 
-    @property
-    def out_dim(self) -> int:
-        return self.output_dims
-
-    def _extra_repr(self):
-        return super()._extra_repr() + f"group_size={self.group_size}, bits={self.bits}"
-
-    # def build_call(self, train: bool) -> Callable:
-    #
-    # def __call__(self, x: Array) -> Array:
-    #     y = ten.quantized_matmul(
-    #         x,
-    #         self.weight,
-    #         scales=self.scales,
-    #         biases=self.biases,
-    #         transpose=True,
-    #         group_size=self.group_size,
-    #         bits=self.bits,
-    #         mode=self.mode,
-    #     )
-    #     if self.bias is not None:
-    #         y = y + self.bias
-    #     # if native := self.native:
-    #     #     yn = native(x)
-    #     #     ten.eval(y, yn)
-    #     #     if not ten.allclose(y, yn):
-    #     #         print(f"Quantized linear and native linear outputs differ: {ten.norm(y - yn):.4f}")
-    #     #         print(f"weight: {ten.norm(self.weight - native.weight):.4f}")
-    #     #         if self.bias is not None:
-    #     #             print(f"bias: {ten.norm(self.bias - native.bias):.4f}")
-    #     #         print(f"scales: {ten.norm(self.scales - native.scales):.4f}")
-    #     #         print(f"biases: {ten.norm(self.biases - native.biases):.4f}")
-    #     return y
-
-    def build_call(self, train: bool = False, **options) -> Callable:
+    def build_call(self, mode: CompiledModule.Mode, **options) -> Callable:
         group_size = self.group_size
         bits = self.bits
-        mode = self.mode
+        quant_mode = self.mode
 
         if self.bias is None:
             def call(x: Array) -> Array:
@@ -240,7 +279,7 @@ class QuantizedLinear(CompiledModule):
                     transpose=True,
                     group_size=group_size,
                     bits=bits,
-                    mode=mode,
+                    mode=quant_mode,
                 )
         else:
             def call(x: Array) -> Array:
@@ -253,10 +292,122 @@ class QuantizedLinear(CompiledModule):
                     transpose=True,
                     group_size=group_size,
                     bits=bits,
-                    mode=mode,
+                    mode=quant_mode,
                 ) + self.bias
 
         return call
+
+
+# TODO: this is not a FunctionModule because it returns a tuple of Arrays....
+@provides(Linear, 'prefused')
+class PrefusedLinear(Linear):
+
+    __slots__ = ('splits',)
+
+    splits: Annotated[list[int], field(
+        doc="Whether to split the output of the fused linear layers",
+        default=True,
+    )]
+
+    def init_from_args(self, args: LinearArgs) -> None:
+        super().init_from_args(args)
+
+        out_dim = self.out_dim
+
+        splits = args.get('splits', 2)
+
+        if isinstance(splits, int):
+            if out_dim % splits != 0:
+                raise ValueError(f'Cannot divide {out_dim} into {splits} even sections')
+            size = out_dim // splits
+            splits = list(range(size, out_dim, size))
+        elif isinstance(splits, list):
+            if any(split >= out_dim for split in splits):
+                raise ValueError(f'Split ends cannot be greater that out_dim {out_dim}: {splits}')
+        else:
+            raise ValueError(f'Unexpected value for splits: {splits!r}')
+
+        self.splits = splits
+
+
+    def build_call(self, mode: CompiledModule.Mode, **options) -> Callable[[Array], tuple[Array, ...]]:
+        splits = self.splits
+
+        if self.bias is None:
+            def call(x: Array) -> tuple[Array, ...]:
+                y = ten.matmul(x, self.weight.T)
+                return ten.split(y, splits, axis=-1)
+        else:
+            def call(x: Array) -> tuple[Array, ...]:
+                y = ten.addmm(self.bias, x, self.weight.T)
+                return ten.split(y, splits, axis=-1)
+
+        return call
+
+
+@provides(Linear, 'fused')
+class FusedLinear(Linear):
+
+    __slots__ = ('fused', 'split_output')
+
+    fused: Annotated[tuple[Linear, ...], field(
+        doc="Tuple of linear layers to fuse",
+    )]
+    split_output: Annotated[bool, field(
+        doc="Whether to split the output of the fused linear layers",
+        default=True,
+    )]
+
+    def init_weight_and_bias(self, args: LinearArgs) -> tuple[Array, Optional[Array]]:
+        fused = self.fused
+        if len(fused) <= 1:
+            raise ValueError("Cannot fuse less than two linear layers")
+
+        in_dim = fused[0].in_dim
+        if any(lin.in_dim != in_dim for lin in fused[1:]):
+            raise ValueError(f"Cannot fuse linear layers with different in_dims: " +
+                             ', '.join(str(lin.in_dim) for lin in fused))
+
+        if any(lin.bias is not None for lin in fused):
+            if not all(lin.bias is not None for lin in fused):
+                raise ValueError("Cannot fuse linear layers with biases")
+            bias = ten.concatenate([lin.bias for lin in fused], axis=0)
+        else:
+            bias = None
+
+        weight = ten.concatenate([lin.weight for lin in fused], axis=0)
+
+        return weight, bias
+
+    def build_call(self, mode: CompiledModule.Mode, **options) -> Callable:
+        fused = self.fused
+
+        if self.split_output:
+            split_pos = 0
+            splits = []
+            for lin in fused[:-1]:
+                split_pos += lin.weight.shape[0]
+                splits.append(split_pos)
+
+
+            if self.bias is None:
+                def fused_linear(x: Array) -> Sequence[Array]:
+                    y = ten.matmul(x, self.weight.T)
+                    return ten.split(y, splits, axis=-1)
+            else:
+                def fused_linear(x: Array) -> Sequence[Array]:
+                    y = ten.addmm(self.bias, x, self.weight.T)
+                    return ten.split(y, splits, axis=-1)
+        else:
+            if self.bias is None:
+                def fused_linear(x: Array) -> Array:
+                    return ten.matmul(x, self.weight.T)
+            else:
+                def fused_linear(x: Array) -> Array:
+                    return ten.addmm(self.bias, x, self.weight.T)
+
+        return fused_linear
+
 
 
 class GatedLinearArgs(ModuleArgs):
@@ -299,7 +450,7 @@ class GatedLinear(CompiledModule):
         self.up_proj = self.build_up_proj(bias=self.bias)
         self.activation = self.build_activation()
 
-    def build_call(self, train: bool = False, **options) -> Callable:
+    def build_call(self, mode: CompiledModule.Mode, **options) -> Callable:
         activation = self.activation
         gate_proj = self.gate_proj
         up_proj = self.up_proj
@@ -323,3 +474,4 @@ class GatedLinear(CompiledModule):
     Args = GatedLinearArgs
 
 
+provides(Linear, 'normed')(NormedModule)

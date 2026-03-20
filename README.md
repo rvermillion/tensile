@@ -12,7 +12,7 @@ The goal is not just backend portability. It is to make model building, training
 
 If you work across Apple Silicon and CUDA, the pain is familiar: the same ideas turn into different code because gradients, optimizer updates, execution semantics, and module APIs do not line up cleanly between backends. Tensile sits underneath your code and normalizes those differences so you can focus on the experiment rather than the plumbing.
 
-Switch backends with an environment variable:
+SwitchModule backends with an environment variable:
 
 ```bash
 TENSILE=mlx python train.py

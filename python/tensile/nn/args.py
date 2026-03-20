@@ -1,8 +1,8 @@
 #  Copyright (c) 2026. Richard Vermillion. All Rights Reserved.
 
-from ...infra import field
-from ...infra.types import Annotated, Any, Optional, Self, TypeVar, Union
-from ...config import Config
+from ..infra import field
+from ..infra.types import Annotated, Any, Optional, Self, TypeVar, Union
+from ..config import Config
 
 
 Params = dict[str, Any]
@@ -39,7 +39,7 @@ A = TypeVar('A', bound='ModuleArgs')
 class ModuleArgs(Config):
 
     kind: Annotated[Optional[str], field(inherit=False)] = None
-    dropout: Annotated[Optional[dict[str, Any]], field()] = None
+    weight_aliases: Annotated[Optional[dict[str, Any]], field(inherit=False)] = None
 
     def make_args(self, name: str, /, cls: type[A] = None, **kwargs) -> A:
         if cls is None: cls = self.__class__

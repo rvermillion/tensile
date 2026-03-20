@@ -21,7 +21,7 @@ silu: Activation = meta.coerce(Activation, kind='silu')
 
 
 @meta.provides_singleton(BinaryActivation, 'swiglu')
-@ten.compile()
+@ten.compile(shapeless=True)
 def swiglu(gate: Array, x: Array) -> Array:
     return silu(gate) * x
 

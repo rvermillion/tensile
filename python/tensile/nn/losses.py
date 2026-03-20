@@ -1,8 +1,8 @@
 #  Copyright (c) 2025-2026. Richard Vermillion. All Rights Reserved.
 import math
-from typing import Literal
+from typing import Literal, final
 
-from ..infra.util import name_function
+from ..infra.util import name_function, tie_call
 from .common import *
 
 
@@ -30,8 +30,6 @@ class LossFunction(Protocol):
 class ExtraLossFunction(Protocol):
 
     def __call__(self, predictions: Array, targets: Array, *extra: Array) -> Array: ...
-
-
 
 
 Reduction = Literal["none", "mean", "sum"]

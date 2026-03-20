@@ -1,6 +1,6 @@
 #  Copyright (c) 2025-2026. Richard Vermillion. All Rights Reserved.
 from pathlib import Path
-from typing import Any, Callable, Literal, TypeGuard, TypeVar
+from typing import Any, Callable, Literal, Sequence, TYPE_CHECKING, TypeGuard, TypeVar, Union
 
 import mlx.core as mx
 import mlx.core.random as mxr
@@ -106,6 +106,7 @@ from mlx.core import (
     contiguous,
     swapaxes, transpose,
     broadcast_to,
+    flatten, unflatten,
     as_strided,
     inf,
     all, any,
@@ -120,6 +121,7 @@ from mlx.core import (
     synchronize,
     metal,
     quantize, quantized_matmul, dequantize,
+    stop_gradient,
 )
 
 clear_cache = metal.clear_cache
@@ -137,24 +139,22 @@ def dtype(dt: str|DType) -> DType:
     raise TypeError(f"Invalid dtype: {dt}")
 
 
-softmax = mx.softmax
-# def softmax(a: ArrayLike, axis: Axes = None, keepdims: bool = False, dtype: DType = None) -> Array:
-#     if dtype is not None and dtype != a.dtype:
-#         a = a.astype(dtype)
-#     out = mx.softmax(a, axis=axis)
-#     if keepdims:
-#         if axis is None:
-#             shape = [1] * a.ndim
-#         else:
-#             shape = list(a.shape)
-#             if isinstance(axis, int):
-#                 shape[axis] = 1
-#             elif isinstance(axis, tuple):
-#                 for ax in axis:
-#                     shape[ax] = 1
-#         out = out.reshape(*shape)
-#     return out
+if TYPE_CHECKING:
+    def split(x: Array, indices_or_sections: int|Sequence[int], axis: int = 0) -> tuple[Array, ...]: ...
 
+    def gather_mm(a: Array, b: Array, /, lhs_indices: Array = None, rhs_indices: Array = None, *, sorted_indices: bool = False, **kwargs) -> Array: ...
+
+    def softmax(a: Array, /, axis: Union[None, int, Sequence[int]] = None, *, precise: bool = False, stream: Union[None, Stream, mx.Device] = None) -> array: ...
+
+else:
+    from mlx.core import (
+        split,
+        gather_mm,
+        softmax,
+    )
+
+
+concat = concatenate
 
 from . import fast, linalg, random, functional
 
@@ -164,8 +164,7 @@ ten_kind: str = 'mlx'
 debug: bool = False
 
 
-def detach(a: Array) -> Array:
-    return a
+detach = stop_gradient
 
 
 def debug_eval(*args: Any) -> None:
@@ -194,7 +193,9 @@ C = TypeVar('C', bound=Callable)
 
 
 def compile(**kwargs) -> Callable[[C], C]:
-    return mx.compile
+    def decorate(call: C):
+        return mx.compile(call, **kwargs)
+    return decorate
 
 
 

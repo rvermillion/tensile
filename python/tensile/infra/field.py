@@ -20,10 +20,11 @@ def private_slot(name: str) -> str:
 
 class FieldType(RootObject):
 
-    __slots__ = ['anno', 'cls', 'qname', 'args', 'optional', 'coerce']
+    __slots__ = ['anno', 'cls', 'meta', 'qname', 'args', 'optional', 'coerce']
 
     anno: Any
     cls: Optional[type]
+    meta: Optional['Meta']
     qname: str
     args: tuple['FieldType', ...]
     optional: bool
@@ -45,7 +46,7 @@ class FieldType(RootObject):
 
         self.anno = anno
         self.cls = cls
-        self.qname = qname
+        self.qname = qname or ('unknown' if cls is None else class_qname(cls))
         self.args = args
         self.optional = optional
         self.coerce = None
@@ -55,6 +56,8 @@ class FieldType(RootObject):
             cached_field_types[anno] = self
 
     def qname_registered(self, meta: 'Meta'):
+        # self.info('Deferred field type for {!r}: {!r}', self, meta)
+        self.meta = meta
         if self.cls is None:
             self.cls = meta.cls
         else:
@@ -167,6 +170,9 @@ class FieldType(RootObject):
 
         try:
             impl = FieldType
+
+            if anno is None:
+                anno = NoneType
 
             if isinstance(anno, str):
                 if '.' in anno:
@@ -1063,6 +1069,9 @@ class Field(RootObject):
     def new_spec(cls, **kwargs) -> Spec:
         return Spec(**kwargs) if kwargs else Spec()
 
+    def add_state(self, this: Any, state: dict[str, Any]):
+        state[self.name] = self.get(this)
+
     def describe(self, qualified: bool = False) -> str:
         buff = StringBuffer(sep=' ')
         name = self.qname if qualified else self.name
@@ -1151,6 +1160,14 @@ class Field(RootObject):
         return peek_is_setter(peek=self.peek, default=self.default, equiv=self.equiv)
 
     def build_poke(self, spec: Spec) -> Setter:
+        if delegate := self.delegate:
+            name = self.name
+            dot = delegate.find('.')
+            if dot >= 0:
+                delegate, name = delegate[:dot], delegate[dot + 1:]
+            def poke(this: Any, value: Any):
+                setattr(getattr(this, delegate), name, value)
+            return poke
         return build_poke(member=self.member, slot=self.slot, desc=self.qname)
 
     def build_coerce(self, spec: Spec) -> Optional[Coercer]:
@@ -1188,14 +1205,8 @@ class Field(RootObject):
         if getattr(self.owner.cls, setter_method, None):
             return method_setter(method=setter_method)
 
-        if delegate := self.delegate:
-            name = self.name
-            dot = delegate.find('.')
-            if dot >= 0:
-                delegate, name = delegate[:dot], delegate[dot + 1:]
-            def setter(this: Any, value: Any):
-                setattr(getattr(this, delegate), name, value)
-            return setter
+        if self.delegate:
+            return self.poke
         if Scope.is_instance(self.scope):
             setter = build_setter(poke=self.poke, coerce=self.coerce, peek=self.peek,
                                   changed=self.changed, changing=self.changing,
@@ -1219,7 +1230,12 @@ class Field(RootObject):
             return None
         if self.readonly and isinstance(self.member, property):
             return None
-        return name_initter(self.name, self.aliases, writer=self.write,
+
+        # If we are delegating, don't poke!
+        poke = self.write if self.delegate else self.poke
+        return name_initter(self.name, self.aliases,
+                            writer=self.write,
+                            poke=poke,
                             default=self.default,
                             default_factory=self.default_factory,
                             optional=self.type.optional)

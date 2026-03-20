@@ -213,6 +213,44 @@ class ModelCache(Object, Storable):
     def _repr_args(self) -> str:
         return f'layers={len(self.layers)}'
 
+    @staticmethod
+    def cache_for_model(model: 'tensile.models.LanguageModel', n_streams: int = 1, **kwargs) -> 'ModelCache':
+        """
+        Construct the model's cache for use when cgeneration.
+
+        This function will defer the cache construction to the model if it has a
+        ``make_cache`` method, otherwise it will make a default KV cache.
+
+        Args:
+            model (nn.Module): The language model.
+            max_kv_size (Optional[int]): If provided and the model does not have a
+                ``make_cache`` method, a ``RotatingKVCache`` is used with a maximum
+                size of ``max_kv_size``
+        """
+        if hasattr(model, "make_cache"):
+            return model.make_cache()
+
+        # num_layers = len(model.layers)
+        # if max_kv_size is not None:
+        #     return [
+        #         RotatingKVCache(max_size=max_kv_size, keep=4) for _ in range(num_layers)
+        #     ]
+        # else:
+
+        model = model.lm
+
+        if n_streams > 1:
+            layers = []
+            for layer_id, layer in enumerate(model.layers):
+                cache_layer = LayerKVCache(layer=layer, layer_id=layer_id)
+
+                layers.append(cache_layer)
+        else:
+            layers = [LayerKVCache(layer=layer, layer_id=layer_id) for layer_id, layer in enumerate(model.layers)]
+
+        return ModelCache(model=model, layers=layers)
+
+
 
 class LayerKVCache(KVCache):
 
@@ -267,7 +305,7 @@ class LayerKVCache(KVCache):
         super().postinit(spec)
         self.kvs = KVBuffer(pos_start=0)
 
-        layer_attn = self.layer.self_attn
+        layer_attn = self.layer.attention
 
         self.n_heads = layer_attn.n_heads
         self.n_kv_heads = layer_attn.n_kv_heads
@@ -303,16 +341,16 @@ class LayerKVCache(KVCache):
         offset = self.offset
 
         if update:
-            if keys.ndim < 5:
-                keys = ten.expand_dims(keys, axis=2)
-            if values.ndim < 5:
-                values = ten.expand_dims(values, axis=2)
+            # if keys.ndim < 5:
+            #     keys = ten.expand_dims(keys, axis=2)
+            # if values.ndim < 5:
+            #     values = ten.expand_dims(values, axis=2)
             keys, values = self.update_and_fetch_kv(keys, values)
         else:
             keys, values = self.fetch_kv(n_batches=keys.shape[0])
 
         self.attended_keys += self.offset * Q
-
+        ten.eval(queries, keys, values)
         out = attend(queries, keys, values, scale=scale, masker=masker, offset=offset)
 
         return out

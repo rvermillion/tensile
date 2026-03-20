@@ -27,6 +27,8 @@ def make_uniform(*, low: float = None, high: float = None, default_scale: float 
 
 def make_normal(*, loc: float = None, default_scale: float = None) -> Initializer:
 
+    if loc is None: loc = 0.0
+
     def normal(shape: ten.Shape, /, scale: Optional[float] = default_scale) -> Array:
         if scale is None:
             scale = 1.0 / math.sqrt(shape[-1])

@@ -8,11 +8,17 @@ from ..infra.types import Annotated, ClassVar, TYPE_CHECKING
 
 class Repo(Object):
 
-    __slots__ = ('name', 'local_path', 'download', 'weight_files')
+    __slots__ = ('path', 'name', 'org', 'local_path', 'download', 'weight_files')
 
-    name: Annotated[str, field(
+    path: Annotated[str, field(
         doc='The name of the repository.',
         required=True,
+    )]
+    name: Annotated[str, field(
+        doc='The org of the repository.',
+    )]
+    org: Annotated[str, field(
+        doc='The org of the repository.',
     )]
 
     local_path: Annotated[Path, field(
@@ -21,11 +27,18 @@ class Repo(Object):
 
     download: Annotated[bool, field(
         doc='Whether to download the repository.',
+        default=True,
     )]
 
     weight_files: Annotated[list[Path], field(
         doc='The weight files in the repository.',
     )]
+
+    def _lazy_name(self):
+        return self.path.split('/')[-1]
+
+    def _lazy_org(self):
+        return self.path.split('/')[0]
 
     def _lazy_local_path(self) -> Path:
         raise ValueError("Local path not initialized")
@@ -40,11 +53,14 @@ class Repo(Object):
         return weight_files
 
     def _repr_args(self, **options) -> str:
-        return self.name
+        return self.qname
 
     @property
     def qname(self) -> str:
-        return self.kind + ':' + self.name
+        return self.short_kind + ':' + self.path
+
+    def fetch_config(self) -> dict:
+        raise NotImplementedError(self)
 
     @classmethod
     def _coerce_from_str(cls, spec: str, /, kind: str = None, **kwargs):
@@ -57,10 +73,13 @@ class Repo(Object):
             if kind is None: kind = default_repo_provider
             repo = spec
         kwargs['kind'] = get_repo_provider(kind)
-        kwargs.setdefault('name', repo)
+        kwargs.setdefault('path', repo)
         return cls._coerce_from_mapping(kwargs)
 
     kind: ClassVar[Annotated[str, field(
+        doc='The kind of repository.',
+    )]]
+    short_kind: ClassVar[Annotated[str, field(
         doc='The kind of repository.',
     )]]
 

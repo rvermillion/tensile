@@ -1,33 +1,32 @@
 #  Copyright (c) 2026. Richard Vermillion. All Rights Reserved.
+from tensile.common import *
 from tensile.nn.losses import cross_entropy, LossFunction
 from tensile.nn.module import Module, ForwardContext
-from tensile.nn.module.instrument import C, Instrument
-from tensile.nn.common import *
+from tensile.nn.instrument import Call, Instrument
+from tensile.train import TrainingContext
 from tensile.optim import Optimizer
 
 
 @provides(Instrument, 'extra.head_precondition')
 class HeadPreconditionInstrument(Instrument):
 
-    __slots__ = ('loss_fn', 'optimizer_specs')
+    __slots__ = ('loss_fn', 'optimizer')
 
     loss_fn: Annotated[LossFunction, field(
         doc="The loss function to use",
-        default=cross_entropy
+        default=coerce(LossFunction, kind='cross_entropy'),
     )]
-    optimizer_specs: Annotated[dict[str, Any], field(
+    optimizer: Annotated[dict[str, Any], field(
         doc="The optimizer specs to use.",
         default_factory=dict,
     )]
 
     def build_optimizer(self, module: Module) -> Optimizer:
-        spec = self.optimizer_specs.copy()
-        spec['model'] = module
-        return Optimizer.coerce(spec)
+        return Optimizer.coerce(self.optimizer, model=module)
 
-    def wrap_call(self, module: Module, call: C, training: bool) -> C:
+    def instrument(self, module: Module, call: Call, mode: Module.Mode) -> Call:
 
-        if not training:
+        if not mode.is_train():
             return call
 
         loss_fn = self.loss_fn
@@ -35,19 +34,20 @@ class HeadPreconditionInstrument(Instrument):
         def train_fn(batch):
             inputs, targets = batch
             logits = call(inputs)
-            return loss_fn(logits, targets)
+            loss = loss_fn(logits, targets)
+            return loss
 
         optim = self.build_optimizer(module)
 
         step = optim.stepper(train_fn)
 
         def two_phase_call(h):
-            ctx = ForwardContext.get_current()
-            if batch := ctx.get_param('batch'):
+            ctx = TrainingContext.get_current()
+            if batch := ctx.current_batch_data:
                 _, targets = batch
 
                 # Phase 1: detached inner update
-                h_detached = h.detach()
+                h_detached = ten.stop_gradient(h)
 
                 step((h_detached, targets))
 

@@ -5,7 +5,7 @@ from ..common import *
 from .types import AttentionMasker, MaskBuilder
 
 
-mask_value = -ten.inf
+mask_value = -1e9
 
 
 @provides(MaskBuilder, 'causal', spread=True)
@@ -39,6 +39,7 @@ def causal(window_size: Optional[int] = None, lengths: Optional[Array] = None, d
 def create_causal_mask(
     size: int,
     offset: int = 0,
+    window_size: int = 0,
     dtype: DType = ten.float32,
 ) -> Array:
     rinds = ten.arange(offset + size)
@@ -46,7 +47,11 @@ def create_causal_mask(
     linds = linds[:, None]
     rinds = rinds[None]
     mask = linds < rinds
+    if 0 < window_size < size:
+        mask = mask | (linds >= rinds + window_size)
+    ten.eval(mask)
     return ten.as_type(ten.where(mask, mask_value, 0.), dtype=dtype)
+
 
 
 class BaseAttentionMasker(RootObject):

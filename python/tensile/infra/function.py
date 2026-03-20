@@ -1,8 +1,10 @@
 #  Copyright (c) 2026. Richard Vermillion. All Rights Reserved.
 
-from typing import Any, Callable, Iterable, Sequence, TypeVar, Union
+from typing import ParamSpec, final
 
-from .util import name_function
+from .root import RootObject
+from .util import name_function, tie_call
+from .types import Annotated, Any, Callable, Iterable, Sequence, TypeVar, Generic
 
 X = TypeVar('X')
 Y = TypeVar('Y')
@@ -64,4 +66,29 @@ def compose_all(fns: Sequence[Callable[[X], X]]) -> Callable[[X], X]:
             return name_function(composed, name=f'compose[{", ".join(fn.__name__ for fn in fns)}]')
     return identity
 
+
+P = ParamSpec('P')
+X = TypeVar("X")
+
+
+class Function(RootObject, Generic[P, X]):
+
+    __slots__ = ('call', '_name')
+
+    call: Callable[P, X]
+    _name: str
+
+    def __init__(self, call: Callable[P, X], name: str = None):
+        self.call = call
+        self._name = name or call.__qualname__
+
+    @final
+    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> X:
+        return self.call(*args, **kwargs)
+
+    def _repr_args(self, **options) -> str:
+        return self._name
+
+
+tie_call(Function, 'call')
 

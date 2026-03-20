@@ -245,13 +245,18 @@ def transform_coercer(transform: TransformFunction[Any, Y], desc: str = '') -> C
     return name_function(coerce, desc)
 
 
-def name_initter(name: str, aliases: tuple[str, ...] = None, /, writer: Setter = None,
+def name_initter(name: str, aliases: tuple[str, ...] = None, /,
+                 writer: Setter = None,
+                 poke: Setter = None,
                  default: Any = None,
                  default_factory: Callable[[], Any] = None,
                  required: bool = False,
                  optional: bool = False) -> Initter[Any]:
     if writer is None:
         writer = attr_setter(name)
+
+    if poke is None:
+        poke = writer
 
     if optional:
         def is_unset(value: Any) -> bool:
@@ -262,8 +267,9 @@ def name_initter(name: str, aliases: tuple[str, ...] = None, /, writer: Setter =
 
     if aliases:
         if required:
-            def init(this: Any, spec: Spec):
-                value = spec.get(name, missing)
+            def init(this: Any, spec: Spec) -> str:
+                alias = name
+                value = spec.get(alias, missing)
 
                 if is_unset(value):
                     for alias in aliases:
@@ -274,10 +280,12 @@ def name_initter(name: str, aliases: tuple[str, ...] = None, /, writer: Setter =
                         raise ValueError(f'{name} (or {", ".join(aliases)}) is required!')
 
                 writer(this, value)
+                return alias
         elif default_factory is not None:
 
-            def init(this: Any, spec: Spec):
-                value = spec.get(name, missing)
+            def init(this: Any, spec: Spec) -> str|None:
+                alias = name
+                value = spec.get(alias, missing)
 
                 if is_unset(value):
                     for alias in aliases:
@@ -285,12 +293,15 @@ def name_initter(name: str, aliases: tuple[str, ...] = None, /, writer: Setter =
                         if not is_unset(value):
                             break
                     else:
-                        value = default_factory()
+                        poke(this, default_factory())
+                        return None
 
                 writer(this, value)
+                return alias
         else:
-            def init(this: Any, spec: Spec):
-                value = spec.get(name, missing)
+            def init(this: Any, spec: Spec) -> str|None:
+                alias = name
+                value = spec.get(alias, missing)
 
                 if is_unset(value):
                     for alias in aliases:
@@ -298,29 +309,41 @@ def name_initter(name: str, aliases: tuple[str, ...] = None, /, writer: Setter =
                         if not is_unset(value):
                             break
                     else:
-                        value = default
+                        poke(this, default)
+                        return None
 
                 writer(this, value)
+                return alias
     else:
         if required:
-            def init(this: Any, spec: Spec):
+            def init(this: Any, spec: Spec) -> str|None:
                 value = spec.get(name, missing)
                 if value is missing:
                     raise ValueError(f'{name} is required!')
                 writer(this, value)
+                return name
         elif default_factory is not None:
-            def init(this: Any, spec: Spec):
+            def init(this: Any, spec: Spec) -> str|None:
                 value = spec.get(name, missing)
                 try:
-                    if is_unset(value): value = default_factory()
-                    writer(this, value)
+                    if is_unset(value):
+                        poke(this, default_factory())
+                        return None
+                    else:
+                        writer(this, value)
+                        return name
                 except Exception as e:
                     raise AttributeError(f'Error initializing field [{name}] with: {value}') from e
         else:
-            def init(this: Any, spec: Spec):
+            def init(this: Any, spec: Spec) -> str|None:
                 value = spec.get(name, missing)
                 try:
-                    writer(this, default if is_unset(value) else value)
+                    if is_unset(value):
+                        poke(this, default)
+                        return None
+                    else:
+                        writer(this, value)
+                        return name
                 except Exception as e:
                     raise AttributeError(f'Error initializing field [{name}] with: {value}') from e
 
@@ -442,7 +465,7 @@ def coerce_type(cls: Optional[type[X]], optional: bool = False, qname: str = Non
             coerce = qname_coercers.get(qname)
         if coerce is None:
             if is_runtime_class(cls):
-                if getattr(cls, 'auto_coerce', False) if auto is None else auto:
+                if getattr(cls, '_auto_coerce', False) if auto is None else auto:
                     meta = infra.meta.for_spec(cls or qname, build=True)
                     coerce = meta_coercer(meta)
                 if coerce is None:

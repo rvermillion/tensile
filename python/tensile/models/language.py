@@ -4,27 +4,29 @@ from ..nn.module import *
 from ..nn.layers.lm import LM, LMArgs
 from ..infra import field, meta, provides
 from ..infra.types import *
-from ..shims import Array
+from ..ten import Array
 from .model import Model, ModelArgs
+
+if TYPE_CHECKING:
+    import tensile.nn.attention.context
 
 
 class LanguageModelArgs(ModelArgs):
     model_type: str = 'language'
-    model: LMArgs
+    lm: LMArgs
     lm_head: Optional[ModuleArgs] = None
-    remap_weights: dict[str, str] = None
 
 
 @provides(Model, 'language')
 class LanguageModel(Model):
 
-    __slots__ = ('model', 'lm_head')
+    __slots__ = ('lm', 'lm_head')
 
     args: Annotated[LanguageModelArgs, field(
         doc="The arguments for this model.",
         init_order=0,
     )]
-    model: Annotated[LM, field(
+    lm: Annotated[LM, field(
         doc="The LM model instance.",
     )]
     lm_head: Annotated[Optional[Module], field(
@@ -33,63 +35,60 @@ class LanguageModel(Model):
 
     def init_from_args(self, args: LanguageModelArgs):
         super().init_from_args(args)
-        self.model = self.build_model(args)
+        self.lm = self.build_lm(args)
         self.lm_head = self.build_lm_head(args)
 
-    def build_model(self, args: LanguageModelArgs) -> LM:
-        return LM.from_args(args.model)
+    def build_lm(self, args: LanguageModelArgs) -> LM:
+        return LM.from_args(args.lm)
 
     def build_lm_head(self, args: LanguageModelArgs) -> Optional[Module]:
         if lm_head_args := args.lm_head:
             lm_head_args.set_defaults(
-                input_dims=self.model.hidden_size,
-                output_dims=self.model.vocab_size,
+                in_dim=self.lm.hidden_dim,
+                out_dim=self.lm.vocab_size,
             )
-            return self.build_proj_from_args(lm_head_args)
+            return self.init_proj(lm_head_args)
         return None
 
-    def build_call(self, train: bool = False, **options) -> Callable:
-        model = self.model
+    def build_call(self, mode: CompiledModule.Mode, **options) -> Callable:
+        lm = self.lm
         lm_head = self.lm_head
 
         if lm_head is None:
-            embed_tokens = self.model.embed_tokens
+            embed_tokens = lm.embed_tokens
 
-            tied_embeddings = getattr(embed_tokens, 'as_linear')
+            lm_head = getattr(embed_tokens, 'as_linear')
 
-            def call(inputs: Array):
-                out = model(inputs)
-                return tied_embeddings(out)
-
-        else:
-
-            def call(inputs: Array):
-                out = model(inputs)
-                return lm_head(out)
+        def call(inputs: Array):
+            out = lm(inputs)
+            return lm_head(out)
         return call
 
-    def build_forward_context(self, model: Module = None, **kwargs) -> ForwardContext:
+    def build_forward_context(self, model: Module = None, **kwargs) -> 'tensile.nn.attention.context.AttentionContext':
         if model is None: model = self
-        return self.model.build_forward_context(model=model, **kwargs)
+        return self.lm.build_forward_context(model=model, **kwargs)
 
     @property
     def in_dim(self) -> int:
-        if model := self.model:
-            return model.in_dim
+        if lm := self.lm:
+            return lm.in_dim
         return -1
 
     @property
     def out_dim(self) -> int:
         if lm_head := self.lm_head:
             return lm_head.out_dim
-        elif model := self.model:
-            return model.in_dim
+        elif lm := self.lm:
+            return lm.in_dim
         return super().out_dim
 
     @property
     def layers(self):
-        return self.model.layers
+        return self.lm.layers
 
+    default_weight_aliases = {
+        'model': 'lm'
+    }
 
     Args = LanguageModelArgs
 

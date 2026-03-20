@@ -1,6 +1,9 @@
 #  Copyright (c) 2025-2026. Richard Vermillion. All Rights Reserved.
+from typing import Literal, cast, overload
+
 import sys
 
+from .function import identity
 from .types import *
 from .behavior import *
 from .root import *
@@ -43,7 +46,7 @@ class CoerceFunction(Protocol):
 
 class Meta(RootObject):
 
-    __slots__ = ['cls', 'bases', 'children', 'registry', 'coerce']
+    __slots__ = ['cls', 'bases', 'children', 'registry', 'coerce', 'get_state', 'update_state']
 
     cls: type
     name: str
@@ -54,9 +57,12 @@ class Meta(RootObject):
     fields: dict[str, Field]
     registry: Optional[Registry[Any]]
     coerce: CoerceFunction
+    get_state: Callable[[Any], Any]
+    update_state: Callable[[Any, Any], Any]
 
     # noinspection PyShadowingNames
-    def __init__(self, cls: type, coerce: CoerceFunction = None, **kwargs):
+    def __init__(self, cls: type, coerce: CoerceFunction = None, get_state: Callable[[Any], Any] = None,
+                 update_state: Callable[[Any, Any], Any] = None, **kwargs):
         if cls in meta_by_type:
             raise MetaError(f'Meta object already defined for {cls}')
 
@@ -65,6 +71,8 @@ class Meta(RootObject):
         self.bases = ()
         self.registry = None
         self.coerce = self.default_coerce if coerce is None else coerce
+        self.get_state = self.default_get_state if get_state is None else get_state
+        self.update_state = self.default_update_state if update_state is None else update_state
 
         meta_register(self, cls=cls)
 
@@ -150,6 +158,11 @@ class Meta(RootObject):
     def has_instance(self, obj: Any) -> bool:
         return isinstance(obj, self.cls)
 
+    def is_special_instance(self, obj: Any) -> bool:
+        if registry := self.registry:
+            return registry.has_kind_for_impl(obj.__class__)
+        return False
+
     def all_parents(self) -> Iterable['Meta']:
         inherit = self.cls.mro()[:0:-1]
         for parent in inherit:
@@ -170,6 +183,20 @@ class Meta(RootObject):
                         dedupe.add(child)
                         yield child
                         yield from child.all_children(dedupe)
+
+    def get_impl_for_kind(self, kind: str) -> Optional[type]:
+        if registry := self.registry:
+            if impl := registry.get_impl_for_kind(kind=kind):
+                return impl
+            dot = kind.find('.')
+            if dot > 0:
+                if impl := registry.get_impl_for_kind(kind[:dot]):
+                    meta = for_class(impl)
+                    if meta:
+                        impl = meta.get_impl_for_kind(kind=kind[dot+1:])
+                        registry.add_kind(impl, kind)
+                        return impl
+        return None
 
     def get_registry(self) -> Registry[Any]:
         registry = self.registry
@@ -233,6 +260,14 @@ class Meta(RootObject):
             return sub
         return decorator
 
+    def register_singletons(self, **kinds: T) -> None:
+        reg = self.get_registry()
+
+        for kind, obj in kinds.items():
+            reg.debug('register({}): register singleton for kind [{}] as {!r}',
+                      class_qname(self.cls), kind, obj)
+            reg.register_object(reg.get_key(kind=kind), obj)
+
     def provide_singleton(self, *kinds: str) -> Callable[[T], T]:
         reg = self.get_registry()
 
@@ -277,8 +312,28 @@ class Meta(RootObject):
 
         return decorator
 
+    def default_get_state(self, obj: Any) -> Any:
+        if obj is None: return None
+        self.logger.warn('Using string for state: {}', obj)
+        return repr(obj)
+
+    def default_update_state(self, obj: Any, state: Any) -> Any:
+        self.logger.warn('Cannot update state: {}', obj)
+
     def _repr_args(self) -> str:
         return class_qname(self.cls)
+
+    @overload
+    @classmethod
+    def for_class(cls, impl: type, attr: str = 'meta', build: Literal[True] = True) -> Self: ...
+
+    @overload
+    @classmethod
+    def for_class(cls, impl: type, attr: str = 'meta', build: bool = False) -> Self|None: ...
+
+    @overload
+    @classmethod
+    def for_class(cls, impl: type, attr: str = 'meta') -> Self: ...
 
     @classmethod
     def for_class(cls, impl: type, attr: str = 'meta', build: bool = False) -> Optional[Self]:
@@ -304,7 +359,7 @@ class Meta(RootObject):
         return meta
 
     @classmethod
-    def build(cls, impl: type, **kwargs) -> Self:
+    def build(cls, impl: type, **kwargs) -> 'Meta':
         meta_cls = getattr(impl, 'Meta', None)
         if meta_cls is None:
             meta_cls = ProtocolMeta if is_protocol(impl) else cls
@@ -315,6 +370,12 @@ class Meta(RootObject):
     by_qname: ClassVar[Mapping[str, 'Meta']] = meta_by_qname
 
     Field: ClassVar[type[Field]] = Field
+
+
+Meta.for_class(str, build=True).get_state = identity
+Meta.for_class(int, build=True).get_state = identity
+Meta.for_class(float, build=True).get_state = identity
+Meta.for_class(bool, build=True).get_state = identity
 
 
 class ProtocolMeta(Meta):
@@ -464,7 +525,10 @@ class ObjectMeta(Meta):
 
         init_fields.sort(key=lambda x: x.init_order)
 
-        self.field_inits = tuple(f.init for f in init_fields)
+        self.field_inits = tuple(f.init for f in init_fields if f.init)
+
+    def engineer_state(self) -> None:
+        pass
 
     def init(self, this: Any, spec: Spec):
         for init in self.field_inits:
@@ -502,9 +566,9 @@ class ObjectMeta(Meta):
     def _repr_args(self) -> str:
         return self.qname
 
-    def default_coerce(self, spec: Any = None, /, **kwargs) -> Self:
+    def default_coerce(self, spec: Any = None, /, **kwargs) -> 'tensile.infra.Object':
         if self.has_instance(spec):
-            return spec
+            return cast('tensile.infra.Object', spec)
 
         cls = self.cls
 
@@ -519,11 +583,22 @@ class ObjectMeta(Meta):
             meta = cls.build(impl, **kwargs)
             meta.process_annotations()
             meta.engineer_fields()
+            meta.engineer_state()
+
 
         # meta.print()
 
 
-def for_class(cls: type, build: bool = True) -> Meta:
+@overload
+def for_class(cls: type, build: Literal[True]) -> Meta: ...
+
+@overload
+def for_class(cls: type, build: bool) -> Meta|None: ...
+
+@overload
+def for_class(cls: type) -> Meta: ...
+
+def for_class(cls: type, build: bool = True) -> Meta | None:
     return Meta.for_class(cls, build=build)
 
 
@@ -558,6 +633,11 @@ def coerce_class(cls: str|type) -> type:
     elif isinstance(cls, type):
         return cls
     raise ValueError(f'Invalid class: {cls}')
+
+
+def register_singletons(cls: type, **kinds: T) -> None:
+    meta = Meta.for_class(cls, build=True)
+    return meta.register_singletons(**kinds)
 
 
 def provides(cls: type, *kinds, spread: bool = False) -> Callable[[T], T]:

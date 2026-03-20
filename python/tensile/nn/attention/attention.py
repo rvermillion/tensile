@@ -1,21 +1,21 @@
 #  Copyright (c) 2025-2026. Richard Vermillion. All Rights Reserved.
 
-import tensile.nn.layers
-
 from ..common import *
-from ..layers.linear import LinearArgs
+from ..layers.linear import Linear, LinearArgs
+from ..layers.normalization import NormedModule
 from ..position import PositionEncoder
 from ..module import CompiledModule, Module, ModuleArgs
-from ..util import nilpotent
 from .attend import Attend
+from .context import AttentionContext
 from .util import reshape_qkv
+
 
 
 class AttentionArgs(ModuleArgs):
 
     kind: Annotated[str, meta.field(inherit='attention_kind')] = 'standard'
 
-    hidden_size: int
+    hidden_dim: int
     num_attention_heads: int
     head_dim: Optional[int] = None
     q_head_dim: Optional[int] = None
@@ -30,6 +30,9 @@ class AttentionArgs(ModuleArgs):
     v_proj: Annotated[LinearArgs, field(
         doc='The arguments for the value projection',
     )]
+    qkv_proj: Annotated[LinearArgs, field(
+        doc='The arguments for the fused qkv projection',
+    )]
     o_proj: Annotated[LinearArgs, field(
         doc='The arguments for the output projection',
     )]
@@ -42,18 +45,19 @@ class AttentionArgs(ModuleArgs):
     num_key_value_heads: Optional[int] = None
     bias: Annotated[bool, field(inherit='attention_bias')] = False
 
-    def __post_init__(self):
-        super().__post_init__()
+    def postinit(self, spec: Spec):
+        super().postinit(spec)
 
         if self.num_key_value_heads is None:
             self.num_key_value_heads = self.num_attention_heads
 
 
+@provides(Module, 'attention')
 class Attention(CompiledModule):
 
     __slots__ = ('dim', 'in_dim', 'out_dim', 'n_heads', 'n_kv_heads', 'kv_heads_per_head', 'q_head_dim',
                  'k_head_dim', 'v_head_dim', 'scale', 'attend', 'encode_position',
-                 'q_proj', 'k_proj', 'v_proj', 'o_proj')
+                 'o_proj')
 
     args: Annotated[AttentionArgs, field(ignore=True)]
 
@@ -70,9 +74,6 @@ class Attention(CompiledModule):
     attend: Attend
     encode_position: PositionEncoder
 
-    q_proj: Module
-    k_proj: Module
-    v_proj: Module
     o_proj: Module
 
     default_attention_bias: ClassVar[bool] = False
@@ -81,12 +82,12 @@ class Attention(CompiledModule):
     def init_from_args(self, args: AttentionArgs):
         super().init_from_args(args)
 
-        dim = args.hidden_size
+        dim = args.hidden_dim
         n_heads = args.num_attention_heads
         n_kv_heads = args.num_key_value_heads
         head_dim = args.head_dim or dim // n_heads
         scale = head_dim**-0.5
-        attention_bias = args.get('bias', default=self.default_attention_bias)
+        attention_bias = self.attention_bias
 
         self.dim = dim
         self.in_dim = dim
@@ -99,61 +100,69 @@ class Attention(CompiledModule):
         self.k_head_dim = args.k_head_dim or head_dim
         self.scale = scale
 
-        self.q_proj = self.build_q_proj(dim, bias=attention_bias)
-        self.k_proj = self.build_k_proj(dim, bias=attention_bias)
-        self.v_proj = self.build_v_proj(dim, bias=attention_bias)
-        self.o_proj = self.build_o_proj(dim, bias=attention_bias)
+        self.o_proj = self.init_o_proj(dim, bias=attention_bias)
 
-        self.encode_position = self.build_position_encoder(args)
-        self.attend = self.build_attend(args)
+        self.encode_position = self.init_position_encoder(args)
+        self.attend = self.init_attend(args)
 
-    def build_attend(self, args: AttentionArgs) -> Attend:
+    @property
+    def attention_bias(self) -> bool:
+        return self.args.get('bias', self.default_attention_bias)
+
+    def init_attend(self, args: AttentionArgs) -> Attend:
         attend_args = args.attend.set_defaults(
             kind='default'
         )
         return coerce(Attend, args=attend_args, kind=attend_args.kind)
 
-    def build_q_proj(self, in_size: int, bias: bool = False, name: str = 'q_proj') -> Module:
+    def init_q_proj(self, in_size: int, bias: bool = False, name: str = 'q_proj') -> Module:
         args = self.args.q_proj.set_defaults(
-            input_dims=in_size,
-            output_dims=self.n_heads * self.q_head_dim,
+            in_dim=in_size,
+            out_dim=self.n_heads * self.q_head_dim,
             bias=bias,
         )
-        return self.build_proj_from_args(args)
+        return self.init_proj(args)
 
-    def build_k_proj(self, in_size: int, bias: bool = False, name: str = 'k_proj') -> Module:
-        args = self.args.q_proj.set_defaults(
-            input_dims=in_size,
-            output_dims=self.n_kv_heads * self.k_head_dim,
+    def init_k_proj(self, in_size: int, bias: bool = False, name: str = 'k_proj') -> Module:
+        args = self.args.k_proj.set_defaults(
+            in_dim=in_size,
+            out_dim=self.n_kv_heads * self.k_head_dim,
             bias=bias,
         )
-        return self.build_proj_from_args(args)
+        return self.init_proj(args)
 
-    def build_v_proj(self, in_size: int, bias: bool = False, name: str = 'v_proj') -> Module:
-        args = self.args.q_proj.set_defaults(
-            input_dims=in_size,
-            output_dims=self.n_kv_heads * self.v_head_dim,
+    def init_v_proj(self, in_size: int, bias: bool = False, name: str = 'v_proj') -> Module:
+        args = self.args.v_proj.set_defaults(
+            in_dim=in_size,
+            out_dim=self.n_kv_heads * self.v_head_dim,
             bias=bias,
         )
-        return self.build_proj_from_args(args)
+        return self.init_proj(args)
 
-    def build_o_proj(self, out_size: int, bias: bool = False, name: str = 'o_proj') -> Module:
+    def init_qkv_proj(self, in_size: int, bias: bool = False, name: str = 'qkv_proj') -> Module:
+        args = self.args.qkv_proj.set_defaults(
+            in_dim=in_size,
+            out_dim=self.n_heads * self.q_head_dim +
+                        self.n_kv_heads * self.k_head_dim +
+                        self.n_kv_heads * self.v_head_dim,
+            bias=bias,
+        )
+        return self.init_proj(args)
+
+    def init_o_proj(self, out_size: int, bias: bool = False, name: str = 'o_proj') -> Module:
         args = self.args.o_proj.set_defaults(
-            input_dims=self.n_heads * self.v_head_dim,
-            output_dims=out_size,
+            in_dim=self.n_heads * self.v_head_dim,
+            out_dim=out_size,
             bias=bias,
         )
-        return self.build_proj_from_args(args)
+        return self.init_proj(args)
 
-    def build_position_encoder(self, args: AttentionArgs) -> PositionEncoder:
+    def init_position_encoder(self, args: AttentionArgs) -> PositionEncoder:
         encoder_args = args.position_encoder.set_defaults(
             kind='rope',
             dims=min(self.q_head_dim, self.k_head_dim)
         )
         return PositionEncoder.from_args(encoder_args)
-
-    def nilpotent(self, scale: float = None, precision: DType = None):
-        nilpotent(self.o_proj)
 
     Args = AttentionArgs
 
@@ -164,67 +173,34 @@ meta.for_class(Attention).configure_registry(
 )
 
 
+class BaseAttention(Attention):
 
-ScoreExtra = Callable[[Array], dict[str, Array]]
+    __slots__ = ()
 
+    def build_qkv_proj(self, mode: CompiledModule.Mode, **options) -> Callable[[Array], tuple[Array, Array, Array]]:
+        raise NotImplementedError()
 
-@provides(Attention, 'standard')
-class StandardAttention(Attention):
-
-    __slots__ = ('score_extra',)
-
-    score_extra: ScoreExtra
-
-    def _lazy_score_extra(self) -> ScoreExtra:
-        extra = {}
-        def score_extra(x: Array) -> dict[str, Array]:
-            return extra
-        return score_extra
+    def build_encode_position(self, mode: CompiledModule.Mode) -> tuple[PositionEncoder, PositionEncoder]:
+        return self.encode_position, self.encode_position
 
     # noinspection PyPep8Naming
-    def build_call(self, train: bool = False, **options) -> Callable:
-        q_encode_position = k_encode_position = self.encode_position
-        q_proj = self.q_proj
-        k_proj = self.k_proj
-        v_proj = self.v_proj
+    def build_call(self, mode: CompiledModule.Mode, **options) -> Callable:
+        q_encode_position, k_encode_position = self.build_encode_position(mode)
         o_proj = self.o_proj
 
+        project_qkv = self.build_qkv_proj(mode)
         scale = self.scale
         attend = self.attend
-        score_extra = self.score_extra
 
         H = self.n_heads
         H_kv = self.n_kv_heads
 
         # noinspection PyPep8Naming
         def call(x: Array) -> Array:
-            """
-
-            What's the best way to implement a chunked scaled dot product attention calculation
-            in a Metal kernel?
-
-            Assume I have a query tensor, q, with shape (B, N_q, T_q, D) where B is the batch size,
-            T_q is the length of the query sequence, N_q is the number of query heads, and D is the
-            head dimension.
-
-            Then, I have a list of key/value segments, with each key segment, k[i], and value
-            segment, v[i], is a tensor of shape (B, N_kv, T_kv, D) where T_kv is the number of
-            keys and values in the segment, and N_kv is the number of kv heads.
-
-            For each key/value segment, i,  I need to compute the attention score:
-               a[i] = exp(q @ k[i].T)
-            which will have shape (B, B, L_q, L_kv).
-
-            And
-
-            :param x:
-            :param cache:
-            :return:
-            """
             B, L, D = x.shape
 
             # Project the input into queries, keys and values
-            queries, keys, values = q_proj(x), k_proj(x), v_proj(x)
+            queries, keys, values = project_qkv(x)
 
             # Prepare the queries, keys and values for the attention computation
 
@@ -236,56 +212,119 @@ class StandardAttention(Attention):
 
             # Keys will be shape (B, H_KV, L, D_v)
             values = ten.swapaxes(values.reshape(B, L, H_kv, -1), 1, 2)
-            # queries = queries.reshape(B, L, self.n_heads, -1).transpose(0, 2, 1, 3)
-            # keys = keys.reshape(B, L, self.n_kv_heads, -1).transpose(0, 2, 1, 3)
-            # values = values.reshape(B, L, self.n_kv_heads, -1).transpose(0, 2, 1, 3)
 
-            # ten.eval(queries, keys, values)
-
-            extra = score_extra(x)
-
-            if ctx := tensile.nn.layers.lm.LMContext.get_current():
+            if ctx := AttentionContext.get_current():
                 cache = ctx.layer_cache
+                offset = ctx.offset
                 masker = ctx.get_masker(L, dtype=queries.dtype)
             else:
                 cache = None
+                offset = 0
                 masker = None
 
-            # ten.debug_eval(queries, keys, values)
-            if cache is not None:
-                # Calculate position encoding using offset from cache
-                queries = q_encode_position(queries, offset=cache.offset)
-                keys = k_encode_position(keys, offset=cache.offset)
+            # Calculate position encoding using offset from cache
+            queries = q_encode_position(queries, offset=offset)
+            keys = k_encode_position(keys, offset=offset)
 
-                queries, keys, values = reshape_qkv(queries, keys, values, force_five=True)
-
+            if cache is None:
+                # If we don't have a cache, then just call `attend` directly, passing in the scale and masker
+                output = attend(
+                    queries, keys, values,
+                    scale=scale,
+                    masker=masker,
+                )
+            else:
+                # If we have a cache, let it handle attention, but pass in the scale, masker and attend module for
+                # it to use.
                 output = cache.attention(
                     queries, keys, values,
                     scale=scale,
                     masker=masker,
                     attend=attend,
-                    **extra,
-                )
-            else:
-                # Calculate position encoding using zero offset
-                queries = q_encode_position(queries)
-                keys = k_encode_position(keys)
-
-                queries, keys, values = reshape_qkv(queries, keys, values, force_five=True)
-                ten.debug_eval(queries, keys, values)
-                output = attend(
-                    queries, keys, values,
-                    scale=scale,
-                    masker=masker,
-                    **extra,
                 )
 
+            # Reshape the output, ensuring that it's only 4 dimensions
             if output.ndim == 5:
                 output = output.reshape(B, H, L, -1)
-            ten.debug_eval(output)
             output = ten.swapaxes(output, 1, 2).reshape(B, L, D)
+
+            # Project using o_proj to get the final output
             return o_proj(output)
         return call
+
+
+ScoreExtra = Callable[[Array], dict[str, Array]]
+
+
+@provides(Attention, 'standard')
+class StandardAttention(BaseAttention):
+
+    __slots__ = ('q_proj', 'k_proj', 'v_proj', 'fuse_for_inference')
+
+    q_proj: Module
+    k_proj: Module
+    v_proj: Module
+    fuse_for_inference: Annotated[bool, field(
+        doc="Whether to fuse the query, key, and value projections for inference",
+        default=False,
+    )]
+
+    def init_from_args(self, args: AttentionArgs):
+        super().init_from_args(args)
+
+        dim = self.dim
+        attention_bias = self.attention_bias
+
+        self.q_proj = self.init_q_proj(dim, bias=attention_bias)
+        self.k_proj = self.init_k_proj(dim, bias=attention_bias)
+        self.v_proj = self.init_v_proj(dim, bias=attention_bias)
+
+    def build_qkv_proj(self, mode: CompiledModule.Mode, **options) -> Callable[[Array], tuple[Array, Array, Array]]:
+        q_proj = self.q_proj
+        k_proj = self.k_proj
+        v_proj = self.v_proj
+
+        if mode.is_compiled() and self.fuse_for_inference:
+            if isinstance(q_proj, Linear) and isinstance(k_proj, Linear) and isinstance(v_proj, Linear):
+                return Linear.fuse(q_proj, k_proj, v_proj)
+            else:
+                self.warn('Could not fuse projections for inference: q, k, and v projections are not all Linear modules')
+
+        def project_qkv(x: Array) -> tuple[Array, Array, Array]:
+            return q_proj(x), k_proj(x), v_proj(x)
+
+        return project_qkv
+
+
+@provides(Attention, 'fused-standard')
+class FusedAttention(BaseAttention):
+
+    __slots__ = ('qkv_proj',)
+
+    qkv_proj: Module
+
+    def init_from_args(self, args: AttentionArgs):
+        super().init_from_args(args)
+
+        dim = self.dim
+        attention_bias = self.attention_bias
+
+        self.qkv_proj = self.init_qkv_proj(dim, bias=attention_bias)
+
+    def build_qkv_proj(self, mode: CompiledModule.Mode, **options) -> Callable[[Array], tuple[Array, Array, Array]]:
+        qkv_proj = self.qkv_proj
+        query_pos = self.n_heads * self.q_head_dim
+        key_pos = query_pos + self.n_kv_heads * self.k_head_dim
+
+        def project_qkv(x: Array) -> tuple[Array, Array, Array]:
+            qkv = qkv_proj(x)
+            q, k, v = ten.split(qkv, [query_pos, key_pos], axis=-1)
+            return q, k, v
+
+        return project_qkv
+
+
+provides(Attention, 'normed')(NormedModule)
 
 
 __all__ = [

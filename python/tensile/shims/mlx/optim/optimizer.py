@@ -4,7 +4,7 @@ from pathlib import Path
 import mlx.core as mx
 import mlx.optimizers as optim
 
-from tensile.nn.common import *
+from tensile.common import *
 
 from tensile.optim.optimizer import Optimizer, OptimizerParamGroup
 from tensile.optim.schedule import call_every

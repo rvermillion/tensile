@@ -1,16 +1,7 @@
 #  Copyright (c) 2025-2026. Richard Vermillion. All Rights Reserved.
 
-from typing import (Annotated, Any, Callable, ClassVar, Generic, Iterable, Iterator, Mapping, Optional,
-                    Protocol, Sequence, Self, TYPE_CHECKING, TypeAlias, TypeVar, Union)
 
-from ..shims import ten, Array, DType, Shape
-from ..infra import (
-    Predicate, PredicateLike, Object, coerce, meta, field, predicates,
-    provides, Spec, Transform, TransformLike, tree
-)
-from ..infra.tree import Tree, TreeEntry
-from ..infra.types import Factory, Keywords, PredicateFunction, TransformFunction, JSON
-
+from ..common import *
 
 class Activation(Protocol):
 

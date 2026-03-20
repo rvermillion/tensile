@@ -18,17 +18,16 @@ logic.
 from collections.abc import Container
 from pathlib import Path
 
+from ..common import *
 from ..infra import RootObject
 from ..infra.util import StringBuffer, process_specs
 from ..nn import Module
-from ..nn.common import *
-
+from ..nn.traverse import is_trainable_parameter_traverser
 from .schedule import LRSchedule, OptimizerSchedule
 from .types import (
     GradientHandler, OptimizerStep, OptimizerStepHandler, TrainFunction, Batch,
     OptimizerStartStep, OptimizerEndStep
 )
-from ..nn.module.module import is_trainable_parameter_traverser
 
 
 class BasicStepHandler(RootObject, Generic[Batch]):
@@ -297,13 +296,13 @@ class OptimizerParamGroup(Object):
             new_spec = {}
             config = {}
             for key, value in spec.items():
-                if key not in known_keys:
+                if key not in group_known_keys:
                     config[key] = value
                 else:
                     new_spec[key] = value
             if config:
                 config['kind'] = kind
-                new_spec['config'] = config
+            new_spec['config'] = config
             spec = new_spec
 
         return cls(spec)
@@ -311,6 +310,8 @@ class OptimizerParamGroup(Object):
         # if factory := cls.meta.get_factory(kind=kind):
         #     return factory(spec)
         # raise ValueError(f'Cannot coerce {spec} to kind [{kind}] of {cls}')
+
+group_known_keys = {'group', 'optimizer', 'params'}
 
 
 class OptimizerParamInfo(RootObject):
@@ -428,7 +429,7 @@ class Optimizer(Object, Generic[Batch]):
                 #     params = set(self.params) - all_params
                 rest_group['params'] = params
 
-            return [OptimizerParamGroup(pg_spec) for pg_spec in param_group_specs]
+            return [OptimizerParamGroup.coerce(pg_spec) for pg_spec in param_group_specs]
         else:
             raise ValueError(f'Invalid parameter group spec: {spec}')
 
@@ -615,7 +616,7 @@ class Optimizer(Object, Generic[Batch]):
         raise ValueError(f'Cannot coerce {spec} to kind [{kind}] of {cls}')
 
 
-known_keys = {'model', 'params', 'config', 'current_step', 'param_groups'}
+known_keys = {'model', 'params', 'config', 'current_step', 'param_groups', 'optimizer'}
 
 
 @provides(OptimizerConfig, 'sgd')
@@ -623,7 +624,7 @@ class SGDConfig(OptimizerConfig):
 
     __slots__ = ('momentum', 'weight_decay', 'dampening', 'nesterov')
 
-    momentum: Annotated[OptimizerSchedule, field(
+    momentum: Annotated[float, field(
         doc='The momentum for SGD.'
     )]
     weight_decay: Annotated[OptimizerSchedule, field(

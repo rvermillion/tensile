@@ -1,6 +1,6 @@
 #  Copyright (c) 2026. Richard Vermillion. All Rights Reserved.
 
-from ..shims import ten
+from .. import ten
 from . import optimizer, schedule, types
 
 from .optimizer import Optimizer, OptimizerStep

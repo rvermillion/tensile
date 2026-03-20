@@ -1,4 +1,5 @@
 #  Copyright (c) 2025-2026. Richard Vermillion. All Rights Reserved.
+import math
 
 from .common import *
 from .module import CompiledModule, ModuleArgs
@@ -7,15 +8,30 @@ from .module import CompiledModule, ModuleArgs
 EncodePosition = Callable[[Array, int], Array]
 
 
+class PositionEncoderArgs(ModuleArgs):
+
+    dims: int
+    shift: int = 0
+    traditional: bool = False
+    base: float = 10000,
+    scale: float = 1.0
+    max_positions: int = 2048,
+    original_max_positions: int = 2048,
+    partial_rotary_factor: float = 1.0
+    scaling: dict[str, Any] = None
+
+
 class PositionEncoder(CompiledModule):
 
     __slots__ = ()
+
+    args: Annotated[PositionEncoderArgs, field(ignore=True)]
 
     @property
     def shape(self) -> tuple[int, ...]:
         return ()
 
-    def build_call(self, train: bool = False, **options) -> EncodePosition:
+    def build_call(self, mode: CompiledModule.Mode, **options) -> EncodePosition:
         raise NotImplementedError()
 
     @property
@@ -26,15 +42,7 @@ class PositionEncoder(CompiledModule):
     def out_dim(self) -> int:
         return -1
 
-    class Args(ModuleArgs):
-
-        dims: int
-        shift: int = 0
-        traditional: bool = False
-        base: float = 10000,
-        scale: float = 1.0
-        max_positions: int = 2048,
-        scaling: dict[str, Any] = None
+    Args = PositionEncoderArgs
 
 
 def identity_encoder(x: Array, offset: int = 0) -> Array:
@@ -45,7 +53,7 @@ def identity_encoder(x: Array, offset: int = 0) -> Array:
 class Identity(PositionEncoder):
     """A position encoder that does nothing."""
 
-    def build_call(self, train: bool = False, **options) -> EncodePosition:
+    def build_call(self, mode: CompiledModule.Mode, **options) -> EncodePosition:
         return identity_encoder
 
 
@@ -90,6 +98,36 @@ def build_rope_call(dims: int, traditional: bool = False, base: float = 10000, s
     return call
 
 
+def build_fast_rope_call(dims: int, *, traditional: bool, base: float|None, scale: float,
+                         mscale: float = 1.0,
+                         freqs: Optional[Array] = None) -> EncodePosition:
+    if mscale == 1.0:
+        def call(x, offset=0):
+            return ten.fast.rope(
+                x,
+                dims,
+                traditional=traditional,
+                base=base,
+                scale=scale,
+                offset=offset,
+                freqs=freqs,
+            )
+    else:
+        def call(x, offset=0):
+            x[..., :dims] = mscale * x[..., :dims]
+            return ten.fast.rope(
+                x,
+                dims,
+                traditional=traditional,
+                base=base,
+                scale=scale,
+                offset=offset,
+                freqs=freqs,
+            )
+
+    return call
+
+
 
 @provides(PositionEncoder, 'rope')
 class RoPE(PositionEncoder):
@@ -112,21 +150,42 @@ class RoPE(PositionEncoder):
         scale (float, optional): The scale used to scale the positions. Default: ``1.0``.
     """
 
-    __slots__ = ('dims', 'shift', 'traditional', 'base', 'scale')
+    __slots__ = ('dims', 'traditional', 'base', 'scale', 'scaling', 'freqs')
 
-    dims: int
-    shift: int
-    traditional: bool
-    base: float
-    scale: float
+    dims: Annotated[int, field(
+        doc="The number of dimensions to be used for the RoPE."
+    )]
+    traditional: Annotated[bool, field(
+        doc="Whether to use the traditional implementation of RoPE.",
+        default=False,
+    )]
+    base: Annotated[float, field(
+        doc="The base used to compute angular frequency for each dimension in the positional encodings.",
+        default=10000,
+    )]
+    scale: Annotated[float, field(
+        doc="The scale used to scale the positions.",
+        default=1.0,
+    )]
+    scaling: Annotated[dict[str, Any], field(
+        doc="The scaling configuration for the RoPE.",
+        default_factory=dict,
+        tree=False,
+    )]
+    freqs: Annotated[Optional[Array], field(
+        doc="The frequency scaling factors for the RoPE.",
+        tree=False,
+    )]
 
-    def init_from_args(self, args: PositionEncoder.Args):
+
+    def init_from_args(self, args: PositionEncoderArgs):
         super().init_from_args(args)
         self.dims = args.dims
-        self.shift = args.shift
         self.traditional = args.traditional
         self.base = args.base
         self.scale = args.scale
+        self.scaling = args.scaling
+        self.freqs = None
 
     @property
     def shape(self) -> tuple[int, ...]:
@@ -135,12 +194,67 @@ class RoPE(PositionEncoder):
     def _extra_structure(self):
         return f"{self.dims}, traditional={self.traditional}"
 
-    def build_call(self, train: bool = False, **options) -> EncodePosition:
-        return build_rope_call(self.dims, self.traditional, self.base, self.scale)
+    def build_call(self, mode: CompiledModule.Mode, **options) -> EncodePosition:
+        return build_fast_rope_call(self.dims, traditional=self.traditional, base=self.base,
+                                    scale=self.scale, freqs=self.freqs)
 
 
-@provides(PositionEncoder, 'rope.llama3')
+@provides(PositionEncoder, 'rope-longrope', 'rope-su')
+class SuScaledRoPE(RoPE):
+
+    __slots__ = ()
+
+
+    def init_from_args(self, args: PositionEncoder.Args):
+        super().init_from_args(args)
+
+        self.scaling = scaling = args.scaling
+
+        dims = self.dims
+        base = self.base
+
+        partial_rotary_factor = args.partial_rotary_factor
+        if partial_rotary_factor != 1.0:
+            dims = int(dims * partial_rotary_factor)
+
+        long_factor = scaling.get('long_factor', 1.0)
+        max_positions = args.max_positions
+        original_max_positions = args.original_max_positions
+
+        freqs = base ** (ten.arange(0, dims, 2, dtype=ten.float32) / dims)
+
+        self.freqs = ten.array(long_factor, dtype=ten.float32) * freqs
+
+        def default_scale(f):
+            return math.sqrt(1 + math.log(f) / math.log(original_max_positions))
+
+        factor = max_positions / original_max_positions
+        self.scale = 1.0 if factor <= 1.0 else default_scale(factor)
+
+    def build_call(self, mode: CompiledModule.Mode, **options) -> EncodePosition:
+
+        partial_rotary_factor = self.args.partial_rotary_factor
+
+        if partial_rotary_factor < 1.0:
+            dims = int(self.dims * partial_rotary_factor)
+
+            rope = build_fast_rope_call(dims, traditional=self.traditional, base=None,
+                                        scale=1.0, mscale=self.scale, freqs=self.freqs)
+
+            def call(x: Array, offset: int = 0) -> Array:
+                partial = rope(x[..., :dims], offset)
+                return ten.concatenate([partial, x[..., dims:]], axis=-1)
+
+            return call
+
+        return build_fast_rope_call(self.dims, traditional=self.traditional, base=None,
+                                    scale=1.0, mscale=self.scale, freqs=self.freqs)
+
+
+
+@provides(PositionEncoder, 'rope-llama3')
 class Llama3RoPE(PositionEncoder):
+
     __slots__ = ('dims', 'max_positions', 'traditional', 'base', 'scaling')
 
     dims: Annotated[int, field(
@@ -172,7 +286,7 @@ class Llama3RoPE(PositionEncoder):
         self.base = args.get('base', 10000)
         self.scaling = args.get('scaling', {})
 
-    def build_call(self, train: bool = False, **options) -> EncodePosition:
+    def build_call(self, mode: CompiledModule.Mode, **options) -> EncodePosition:
         scaling_config = self.scaling
 
         factor = scaling_config["factor"]
@@ -218,19 +332,76 @@ class Llama3RoPE(PositionEncoder):
         smooth_freqs = freqs / ((1 - smooth_factors) / factor + smooth_factors)
         freqs = ten.where(is_medium_freq, smooth_freqs, freqs)
 
-        def rope(x, offset: int = 0):
-            return ten.fast.rope(
-                x,
-                dims,
-                traditional=traditional,
-                base=None,
-                scale=1.0,
-                offset=offset,
-                freqs=freqs,
-            )
+        rope = build_fast_rope_call(dims, traditional=traditional, base=None,
+                                    scale=1.0, mscale=1.0, freqs=freqs)
 
         cls.cache[key] = rope
         return rope
+
+
+@provides(PositionEncoder, 'rope-yarn')
+class YarnRoPE(RoPE):
+
+    __slots__ = ('mscale')
+
+    mscale: Annotated[float, field(
+    )]
+
+    def init_from_args(self, args: PositionEncoderArgs):
+        super().init_from_args(args)
+        dims = self.dims
+        base = self.base
+        scaling = self.scaling
+
+        scaling_factor = scaling.get('scaling_factor', 1.0)
+        beta_fast = scaling.get('beta_fast', 32)
+        beta_slow = scaling.get('beta_slow', 1)
+        mscale = scaling.get('mscale', 1)
+        mscale_all_dim = scaling.get('mscale_all_dim', 0)
+
+        original_max_positions = args.original_max_positions
+
+        def yarn_find_correction_dim(num_rotations):
+            return (
+                dims
+                * math.log(
+                original_max_positions / (num_rotations * 2 * math.pi)
+                )
+            ) / (2 * math.log(base))
+
+        def yarn_find_correction_range():
+            low = math.floor(yarn_find_correction_dim(beta_fast))
+            high = math.ceil(yarn_find_correction_dim(beta_slow))
+            return max(low, 0), min(high, dims - 1)
+
+        def yarn_get_mscale(scale=1, mscale=1):
+            if scale <= 1:
+                return 1.0
+            return 0.1 * mscale * math.log(scale) + 1.0
+
+        def yarn_linear_ramp_mask(min_val, max_val, dim):
+            if min_val == max_val:
+                max_val += 0.001  # Prevent singularity
+
+            linear_func = (ten.arange(dim, dtype=ten.float32) - min_val) / (
+                max_val - min_val
+            )
+            return ten.clip(linear_func, 0, 1)
+
+        self.mscale = yarn_get_mscale(scaling_factor, mscale) / yarn_get_mscale(
+            scaling_factor, mscale_all_dim
+        )
+        freq_extra = base ** (ten.arange(0, dims, 2, dtype=ten.float32) / dims)
+        freq_inter = scaling_factor * freq_extra
+        low, high = yarn_find_correction_range()
+        freq_mask = 1.0 - yarn_linear_ramp_mask(low, high, dims // 2)
+        self.freqs = (freq_inter * freq_extra) / (
+            freq_inter * freq_mask + freq_extra * (1 - freq_mask)
+        )
+
+    def build_call(self, mode: CompiledModule.Mode, **options) -> EncodePosition:
+        return build_fast_rope_call(self.dims, traditional=self.traditional, base=None,
+                                    scale=1.0, mscale=self.mscale, freqs=self.freqs)
 
 
 __all__ = [

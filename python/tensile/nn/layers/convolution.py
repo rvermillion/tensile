@@ -4,7 +4,7 @@
 import math
 
 from ..common import *
-from ..module import CompiledModule, Module, ModuleArgs
+from ..module import CompiledModule, FunctionModule, Functional, Module, ModuleArgs
 
 
 class ConvolutionArgs(ModuleArgs):
@@ -20,7 +20,7 @@ class ConvolutionArgs(ModuleArgs):
 
 
 @provides(Module, 'convolution')
-class Convolution(CompiledModule):
+class Convolution(FunctionModule):
 
     __slots__ = ('weight', 'bias', 'd', 'in_channels', 'out_channels', 'kernel_size', 'stride', 'padding', 'groups',)
 
@@ -89,11 +89,7 @@ class Convolution(CompiledModule):
             total_size *= size
 
         scale = math.sqrt(1 / (in_channels * total_size))
-        self.weight = ten.random.uniform(
-            low=-scale,
-            high=scale,
-            shape=(out_channels, *kernel_size, in_channels // groups),
-        )
+        shape = out_channels, *kernel_size, in_channels // groups
 
         self.d = d
         self.in_channels = in_channels
@@ -104,9 +100,10 @@ class Convolution(CompiledModule):
         self.groups = groups
         self.dilation = dilation
 
+        self.weight = ten.random.uniform(low=-scale, high=scale, shape=shape)
         self.bias = ten.zeros((self.out_channels,)) if bias else None
 
-    def build_call(self, train: bool = False, **options) -> Callable:
+    def build_call(self, mode: CompiledModule.Mode, **options) -> Functional:
         stride = self.stride
         padding = self.padding
         dilation = self.dilation
@@ -123,9 +120,13 @@ class Convolution(CompiledModule):
         else:
             raise ValueError(f"Invalid number of dimensions ({self.d})")
 
-        def call(x):
-            y = conv(x, self.weight, self.bias, stride, padding, dilation, groups)
-            return y
+        if mode.is_compiled():
+            weight, bias = self.weight, self.bias
+            def call(x: Array, /) -> Array:
+                return conv(x, weight, bias, stride, padding, dilation, groups)
+        else:
+            def call(x: Array, /) -> Array:
+                return conv(x, self.weight, self.bias, stride, padding, dilation, groups)
 
         return call
 

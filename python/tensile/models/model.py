@@ -7,11 +7,12 @@ from ..nn.module import *
 from ..repo import Repo
 from ..infra import field
 from ..infra.types import *
-from ..shims import Array, ten
+from .. import Array, ten
 
 
 class ModelArgs(QuantizableModuleArgs):
-    name: str = None
+    name: str
+    org: str
     model_type: str = 'unknown'
     repo: str = None
     remap_weights: Optional[dict[str, str]] = None
@@ -31,7 +32,7 @@ class Model(CompiledModule):
     :ivar repo: (Repo?) The repository containing the model weights, or None if not specified.
     """
 
-    __slots__ = ('name', 'model_type', 'repo')
+    __slots__ = ('name', 'org', 'model_type', 'repo')
 
     args: Annotated[ModelArgs, field(
         doc="The arguments for this model.",
@@ -40,6 +41,9 @@ class Model(CompiledModule):
     name: Annotated[str, field(
         doc="The name of the model.",
         required=True,
+    )]
+    org: Annotated[str, field(
+        doc="The organization of the model.",
     )]
     model_type: Annotated[str, field(
         doc="The type of the model, indicating its architecture or purpose.",
@@ -52,8 +56,13 @@ class Model(CompiledModule):
     def init_from_args(self, args: ModelArgs):
         super().init_from_args(args)
         self.name = args.name
+        self.org = args.org
         self.model_type = args.model_type
-        self.repo = None if args.repo is None else Repo.coerce(args.repo)
+        repo = args.repo
+        if repo is None:
+            if self.org is not None:
+                repo = f'hf:{self.org}/{self.name}'
+        self.repo = None if repo is None else Repo.coerce(repo)
 
     def sanitize_weights(self, weights: dict[str, Array]) -> dict[str, Array]:
         if remap_weights := self.args.remap_weights:
@@ -95,17 +104,20 @@ class Model(CompiledModule):
         if load_weights and not weight_files:
             self.error(f"No safetensors found in {path}")
             raise FileNotFoundError(f"No safetensors found in {path}")
+        elif weight_files and load_weights is None:
+            load_weights = True
 
-        weights = {}
-        for wf in weight_files:
-            w = ten.load_tensors(wf)
-            weights.update(w)
+        if load_weights:
+            weights = {}
+            for wf in weight_files:
+                w = ten.load_tensors(wf)
+                weights.update(w)
 
-        weights = self.sanitize_weights(weights)
+            weights = self.sanitize_weights(weights)
 
-        if weights:
-            # params = model.parameters()
-            self.load_weights(list(weights.items()), strict=False)
+            if weights:
+                # params = model.parameters()
+                self.load_weights(list(weights.items()), strict=True)
 
         if not lazy:
             ten.eval(self.parameters())
@@ -114,5 +126,9 @@ class Model(CompiledModule):
 
     def _extra_structure(self) -> str:
         return f'{self.name}, model_type={self.model_type}'
+
+    @classmethod
+    def from_pretrained(cls, repo: str) -> 'Model':
+        raise NotImplementedError('This should be replaced if tensile.models.load is imported')
 
     Args = ModelArgs

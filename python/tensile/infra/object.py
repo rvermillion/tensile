@@ -1,11 +1,11 @@
 #  Copyright (c) 2025-2026. Richard Vermillion. All Rights Reserved.
 import enum
 from pathlib import Path
-from typing import final
+from typing import Generic, final
 
 from .field import field
 from .load import try_load
-from .meta import ObjectMeta, Spec, UpdateableObject, private_slot
+from .meta import Meta, ObjectMeta, Spec, UpdateableObject, private_slot, meta_for_class, meta_for_qname
 from .types import Annotated, Any, Callable, ClassVar, Keywords, Mapping, Optional, Self, Sequence, TypeVar
 from .util import process_specs
 
@@ -33,6 +33,9 @@ class Lifecycle(enum.Enum):
         return self is Lifecycle.error
 
 
+ObjectParent = UpdateableObject
+
+
 class ObjectClass(type):
 
     # noinspection PyPep8Naming
@@ -50,9 +53,21 @@ class ObjectClass(type):
 
         return cls
 
+    def __instancecheck__(self, instance):
+        if type.__instancecheck__(self, instance):
+            return True
+        if type.__instancecheck__(Object, instance):
+            unwrapped = instance._unwrap_object()
+            while unwrapped is not None:
+                if type.__instancecheck__(self, unwrapped):
+                    return True
+                unwrapped = unwrapped._unwrap_object()
+        return False
+
+    meta: ObjectMeta
 
 
-class Object(UpdateableObject, metaclass=ObjectClass):
+class Object(ObjectParent, metaclass=ObjectClass):
 
     __slots__ = ('_spec',)
 
@@ -157,9 +172,20 @@ class Object(UpdateableObject, metaclass=ObjectClass):
             return cls._coerce_from_type(spec, **kwargs)
         elif callable(spec):
             return cls._coerce_from_callable(spec, **kwargs)
+        else:
+            meta = cls.meta
+            spec_cls = type(spec)
+            factory = meta.get_factory(from_type=spec_cls)
+            if factory is None:
+                for sup_cls in spec_cls.mro()[1:]:
+                    meta.warn('looking for factory of {} from spec superclass {}', cls, sup_cls)
+                    factory = meta.get_factory(from_type=sup_cls)
+                    if factory: break
+
+            if factory: return factory(spec, **kwargs)
         raise ValueError(f'Cannot coerce {spec!r} to {cls}')
 
-    auto_coerce: ClassVar[Annotated[bool, field(ignore=True)]] = False
+    _auto_coerce: ClassVar[Annotated[bool, field(ignore=True)]] = False
 
     @classmethod
     def _coerce_from_none(cls):
@@ -204,11 +230,40 @@ class Object(UpdateableObject, metaclass=ObjectClass):
             return factory(spec, **kwargs)
         raise TypeError(f'Cannot coerce a function {spec} to {cls}')
 
+    def _unwrap_object(self) -> Any:
+        return None
+
     Meta: ClassVar[type[ObjectMeta]] = ObjectMeta
     Lifecycle: ClassVar[type[Lifecycle]] = Lifecycle
+
+
+class ObjectFactory(Object, Generic[T]):
+
+    __slots__ = ('interface', 'spec')
+
+    interface: Annotated[Meta, field(
+
+    )]
+    spec: Annotated[Any, field()]
+
+    def _coerce_interface(self, ifc: Any) -> Meta:
+        if ifc is None: raise ValueError('Interface cannot be None!')
+        if isinstance(ifc, type): return meta_for_class(ifc, build=True)
+        if isinstance(ifc, str):
+            if meta := meta_for_qname(ifc):
+                return meta
+            raise ValueError(f'Could not find interface: [{ifc}]')
+        raise TypeError(f'Unexpected value for interface: {ifc!r}')
+
+    def __call__(self, **kwargs) -> T:
+        return self.interface.coerce(self.spec, **kwargs)
+
+    def build(self, **kwargs) -> T:
+        return self.interface.coerce(self.spec, **kwargs)
 
 
 __all__ = [
     'Object',
     'ObjectClass',
+    'ObjectFactory',
 ]

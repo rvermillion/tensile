@@ -3,7 +3,7 @@
 import types
 from typing import ParamSpec
 
-from ..nn.common import *
+from ..common import *
 
 
 def zero(): return ten.array(0.)

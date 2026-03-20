@@ -1,9 +1,11 @@
 #  Copyright (c) 2025. Richard Vermillion. All Rights Reserved.
-from .module.module import apply_to_modules
-from ..infra import RootObject
-from .module import Module, Instrument
+from .instrument import Instrument
+from .module import Module, apply_to_modules
 
 from .common import *
+
+if TYPE_CHECKING:
+    import tensile.models
 
 
 T = TypeVar('T')
@@ -86,6 +88,48 @@ class Patch(Object, interface=True):
         return self.__qualname__
 
     _single_key_kind = True
+
+
+class PatchManager(Object):
+
+    __slots__ = ('patches', 'auto_apply')
+
+    patches: Annotated[dict[str, Patch], field(
+        doc="The patches to use for training",
+        default_factory=dict,
+    )]
+    auto_apply: Annotated[list[str], field(
+        doc="The names of patches to automatically apply before for training",
+        default_factory=list,
+    )]
+
+    def postinit(self, spec: Spec):
+        super().postinit(spec)
+        if auto_apply := self.auto_apply:
+            self.apply_patches(auto_apply)
+            self.info('Automatically applied patches: {}', auto_apply)
+
+    def _coerce_patches(self, spec: Any) -> dict[str, Patch]:
+        if spec is None: return {}
+        if isinstance(spec, Mapping):
+            return {k: Patch.coerce(v, name=k) for k, v in spec.items()}
+        raise ValueError(f"Invalid patches: {spec}")
+
+    @property
+    def model(self) -> 'tensile.models.Model':
+        raise NotImplementedError()
+
+    def apply_patch(self, *names: str):
+        self.apply_patches(names)
+
+    def apply_patches(self, names: Sequence[str]):
+        model = self.model
+        if names:
+            for name in names:
+                self.patches[name].apply(model)
+        else:
+            for patch in self.patches.values():
+                patch.apply(model)
 
 
 @provides(Patch, 'sequence')

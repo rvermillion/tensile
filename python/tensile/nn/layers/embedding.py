@@ -3,7 +3,8 @@
 import math
 
 from ..common import *
-from ..module import CompiledModule
+from ..init import Initializer, Initializers
+from ..module import CompiledModule, FunctionModule, Functional
 from ..quantization import QuantizableModuleArgs
 
 
@@ -13,13 +14,14 @@ class EmbeddingArgs(QuantizableModuleArgs):
         aliases=['input_dim'],
         inherit="vocab_size",
     )]
-    output_dim: Annotated[int, field(
+    out_dim: Annotated[int, field(
         doc="The dimensionality of the embeddings.",
-        inherit="hidden_size",
+        inherit="hidden_dim",
     )]
+    initialize: Initializer = None
 
 
-class Embedding(CompiledModule):
+class Embedding(FunctionModule):
     """Implements a simple lookup table that maps each input integer to a
     high-dimensional vector.
 
@@ -40,11 +42,18 @@ class Embedding(CompiledModule):
 
     def init_from_args(self, args: EmbeddingArgs):
         super().init_from_args(args)
-        dims = args.output_dim
+
+        self.weight = self.init_weight(args)
+
+    def init_weight(self, args: EmbeddingArgs) -> Array:
+        init = args.initialize or Initializers.normal
+
+        dims = args.out_dim
         num_embeddings = args.num_embeddings
 
         scale = math.sqrt(1 / dims)
-        self.weight = ten.random.normal(shape=(num_embeddings, dims), scale=scale)
+
+        return init((num_embeddings, dims), scale=scale)
 
     @property
     def num_embeddings(self) -> int:
@@ -58,13 +67,13 @@ class Embedding(CompiledModule):
     def in_dim(self) -> int:
         return self.num_embeddings
 
-    def build_call(self, train: bool = False, **options):
-        def call(x):
+    def build_call(self, mode: CompiledModule.Mode, **options) -> Functional:
+        def call(x: Array, /) -> Array:
             return self.weight[x]
         return call
 
     def _extra_structure(self):
-        return f'{self.num_embeddings}, {self.output_dim}'
+        return f'{self.num_embeddings}, {self.out_dim}'
 
     def as_linear(self, x):
         """
@@ -76,7 +85,7 @@ class Embedding(CompiledModule):
         return x @ self.weight.T
 
     @classmethod
-    def refine_implementation(cls, args: EmbeddingArgs) -> type[Self]:
+    def refine_implementation(cls, args: EmbeddingArgs) -> type[FunctionModule]:
         return QuantizedEmbedding if args.quantization.group_size > 0 else cls
 
     Args = EmbeddingArgs
@@ -86,7 +95,7 @@ class Embedding(CompiledModule):
     #     return QuantizedEmbedding.from_embedding(self, group_size, bits)
 
 
-class QuantizedEmbedding(CompiledModule):
+class QuantizedEmbedding(FunctionModule):
     """The same as :obj:`Embedding` but with a  quantized weight matrix.
 
     :obj:`QuantizedEmbedding` also provides a :meth:`from_embedding`
@@ -136,7 +145,7 @@ class QuantizedEmbedding(CompiledModule):
 
     def init_from_args(self, args: EmbeddingArgs):
         super().init_from_args(args)
-        dims = args.output_dim
+        dims = args.out_dim
         num_embeddings = args.num_embeddings
 
         quant = args.quantization
@@ -174,13 +183,13 @@ class QuantizedEmbedding(CompiledModule):
     def out_dim(self) -> int:
         return self.output_dims
 
-    def build_call(self, train: bool = False, **options) -> Callable:
+    def build_call(self, mode: CompiledModule.Mode, **options) -> Functional:
 
         group_size = self.group_size
         bits = self.bits
-        mode = self.mode
+        quant_mode = self.mode
 
-        def call(x):
+        def call(x: Array, /) -> Array:
             biases = self.biases
             # ten.debug_eval(x)
             y = ten.dequantize(
@@ -189,7 +198,7 @@ class QuantizedEmbedding(CompiledModule):
                 biases=biases[x] if biases is not None else None,
                 group_size=group_size,
                 bits=bits,
-                mode=mode,
+                mode=quant_mode,
             )
             return y
         return call
@@ -228,7 +237,7 @@ class QuantizedEmbedding(CompiledModule):
     ):
         """Create a :obj:`QuantizedEmbedding` layer from an :obj:`Embedding` layer."""
         num_embeddings, dims = embedding_layer.weight.shape
-        ql = cls(num_embeddings=num_embeddings, output_dims=dims,
+        ql = cls(num_embeddings=num_embeddings, out_dim=dims,
                  group_size=group_size, bits=bits, mode=mode)
         ql.weight, ql.scales, *biases = ten.quantize(
             embedding_layer.weight,

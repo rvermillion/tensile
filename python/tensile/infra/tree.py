@@ -4,7 +4,7 @@ from collections import defaultdict
 from collections.abc import Callable, Iterable, Sequence
 from typing import Any, Generic, Optional, Self, TypeVar, Union
 
-from ..shims import ten
+from .. import ten
 from .function import identity
 from .predicate import Predicate, Predicates
 from .transform import Transform, Transforms
@@ -71,6 +71,13 @@ class Traverser:
         self.parent_first = parent_first
 
 
+def parse_step(step: str) -> str|int:
+    try:
+        return int(step)
+    except ValueError:
+        return step
+
+
 class TreeEntry(tuple[str, T]):
 
     __slot__ = ('parent', 'step')
@@ -105,6 +112,39 @@ class TreeEntry(tuple[str, T]):
         if parent := self.parent:
             return parent.value
         return None
+
+    # noinspection PyShadowingNames
+    def put(self, path: str, value: Any, *, relative: bool = False, carp: bool = True) -> Self:
+        entry = self
+        steps = [parse_step(step) for step in path.split('.')]
+        for s, step in enumerate(steps[:-1]):
+            children = entry.value
+            if entry.is_enumerable:
+                if not isinstance(step, int): raise ValueError(f'Expected an integer at {".".join(steps[:s+1])}')
+                if step >= len(children):
+                    children.extend({} for _ in range(step - len(children)))
+                    children.append([] if isinstance(steps[s+1], int) else {})
+            elif entry.has_items:
+                child = entry.maybe_child(step)
+                if child is None:
+                    children[step] = [] if isinstance(steps[s+1], int) else {}
+            else:
+                raise ValueError('Unexpected!')
+            entry = entry.get_child(step)
+
+        step = steps[-1]
+        children = entry.value
+        if entry.is_enumerable:
+            if not isinstance(step, int): raise ValueError(f'Expected an integer at {".".join(steps)}')
+            if step >= len(children):
+                children.extend({} for _ in range(step - len(children)))
+                children.append(value)
+            else:
+                children[step] = value
+        elif entry.has_items:
+            children[step] = value
+        else:
+            raise ValueError('Unexpected!')
 
     # noinspection PyShadowingNames
     def get(self, path: str, *, relative: bool = False, carp: bool = True) -> Self:
@@ -154,26 +194,50 @@ class TreeEntry(tuple[str, T]):
             raise ValueError(f'Cannot replace without a parent: {self}')
 
     def join(self, other: Self, traverser: 'Traverser') -> Iterable[tuple[Self, Self]]:
-        if traverser.parent_first and traverser.include(self):
+        return (self.join_parent_first(other, traverser)
+                if traverser.parent_first
+                else self.join_parent_last(other, traverser))
+
+    def join_parent_first(self, other: Self, traverser: 'Traverser') -> Iterable[tuple[Self, Self]]:
+        if traverser.include(self):
             yield self, other
         if traverser.descend(self):
             for ochild in other.children():
                 child = self.maybe_child(ochild.step)
                 if child is not None:
-                    yield from child.join(ochild, traverser)
-        if not traverser.parent_first and traverser.include(self):
+                    yield from child.join_parent_first(ochild, traverser)
+
+    def join_parent_last(self, other: Self, traverser: 'Traverser') -> Iterable[tuple[Self, Self]]:
+        if traverser.descend(self):
+            for ochild in other.children():
+                child = self.maybe_child(ochild.step)
+                if child is not None:
+                    yield from child.join_parent_last(ochild, traverser)
+        if traverser.include(self):
             yield self, other
 
     def left_join(self, *others: Optional[Self], traverser: Traverser) -> Iterable[tuple[Optional[Self], ...]]:
-        if traverser.parent_first and traverser.include(self):
+        return (self.left_join_parent_first(*others, traverser=traverser) if traverser.parent_first
+                else self.left_join_parent_last(*others, traverser=traverser))
+
+    def left_join_parent_first(self, *others: Optional[Self], traverser: Traverser) -> Iterable[tuple[Optional[Self], ...]]:
+        if traverser.include(self):
             yield self, *others
         if traverser.descend(self):
             for child in self.children():
-                yield from child.left_join(*(
+                yield from child.left_join_parent_first(*(
                     None if other is None else other.maybe_child(child.step)
                     for other in others
                 ), traverser=traverser)
-        if not traverser.parent_first and traverser.include(self):
+
+    def left_join_parent_last(self, *others: Optional[Self], traverser: Traverser) -> Iterable[tuple[Optional[Self], ...]]:
+        if traverser.descend(self):
+            for child in self.children():
+                yield from child.left_join_parent_last(*(
+                    None if other is None else other.maybe_child(child.step)
+                    for other in others
+                ), traverser=traverser)
+        if traverser.include(self):
             yield self, *others
 
     def is_leaf(self) -> bool:
@@ -235,16 +299,24 @@ class TreeEntry(tuple[str, T]):
         for k, t in self.enumerate_child_nodes():
             yield TreeEntry(f"{prefix}{k}", t, self, k)
 
-    def traverse(self, traverser: Traverser, force_descend: bool = False) -> Iterable['TreeEntry']:
+    def traverse(self, traverser: Traverser) -> Iterable['TreeEntry']:
+        if traverser.parent_first:
+            return self.traverse_parent_first(traverser)
+        else:
+            return self.traverse_parent_last(traverser)
 
-        if traverser.parent_first and traverser.include(self):
+    def traverse_parent_first(self, traverser: Traverser) -> Iterable['TreeEntry']:
+        if traverser.include(self):
             yield self
-
-        if traverser.descend(self) or force_descend:
+        if traverser.descend(self):
             for child in self.children():
-                yield from child.traverse(traverser)
+                yield from child.traverse_parent_first(traverser)
 
-        if not traverser.parent_first and traverser.include(self):
+    def traverse_parent_last(self, traverser: Traverser) -> Iterable['TreeEntry']:
+        if traverser.descend(self):
+            for child in self.children():
+                yield from child.traverse_parent_last(traverser)
+        if traverser.include(self):
             yield self
 
     def any(self, traverser: Traverser) -> bool:
@@ -284,6 +356,8 @@ class TreeEntry(tuple[str, T]):
                         unflat[c.step] = val
                 if unflat:
                     return unflat
+            if force_descend:
+                return {}
         return map_fn(self) if traverser.include(self) else {}
 
     def entries(self,
@@ -382,12 +456,15 @@ def is_path_pattern(path: str) -> bool:
     return bool(special_path.search(path))
 
 
+def str_like(path: str) -> Predicate[str]:
+    if is_path_pattern(path):
+        return Predicates.describe(Predicates.matches(compile_path_re(path)), lambda arg: f"({arg} ~ {path!r})")
+    else:
+        return Predicates.eq(path)
+
+
 def path_like(path: str) -> TreePredicate:
-    return path_predicate(
-        Predicates.describe(Predicates.matches(compile_path_re(path)), lambda arg: f"({arg} ~ {path!r})")
-        if is_path_pattern(path)
-        else Predicates.eq(path)
-    )
+    return path_predicate(str_like(path))
 
 
 def path_equals(path: str) -> TreePredicate:
@@ -499,23 +576,43 @@ def tree_get(
 
 # noinspection PyShadowingNames,PyShadowingBuiltins
 def map(
-    fn: Callable, tree: Tree, *rest: Any, is_leaf: Optional[Callable] = None
+    fn: Callable,
+    tree: Tree,
+    *rest: Any,
+    prefix: str = "",
+    is_leaf: Optional[TreePredicateFunction] = None,
+    include_intermediate: bool = False,
+    include: Optional[TreePredicateFunction] = None,
+    descend: Optional[TreePredicateFunction] = None,
+    parent_first: bool = True,
+    start_children: bool = False,
+    traverser: Traverser = None,
 ) -> Any:
-    if is_leaf is not None and is_leaf(tree):
-        return fn(tree, *rest)
-    elif isinstance(tree, (list, tuple)):
-        seq_type = type(tree)
-        return seq_type(
-            map(fn, child, *rest, is_leaf=is_leaf)
-            for i, child in enumerate(tree)
-        )
-    elif isinstance(tree, dict):
-        return {
-            k: map(fn, child, *rest, is_leaf=is_leaf)
-            for k, child in tree.items()
-        }
+    if traverser is None:
+        traverser = Traverser(is_leaf=is_leaf, include_intermediate=include_intermediate, include=include, descend=descend, parent_first=parent_first)
+    entry = TreeEntry(prefix, tree, None, '')
+    if rest:
+        def map_fn(x):
+            return fn(x, *rest)
     else:
-        return fn(tree, *rest)
+        map_fn = fn
+    return entry.unflat(map_fn=map_fn, traverser=traverser, force_descend=start_children)
+    #
+    # if is_leaf is not None and is_leaf(tree):
+    #     return fn(tree, *rest)
+    # elif isinstance(tree, (list, tuple)):
+    #     seq_type = type(tree)
+    #     return seq_type(
+    #         map(fn, child, *rest, is_leaf=is_leaf)
+    #         for i, child in enumerate(tree)
+    #     )
+    # elif isinstance(tree, dict):
+    #     return {
+    #         k: map(fn, child, *rest, is_leaf=is_leaf)
+    #         for k, child in tree.items()
+    #     }
+    # else:
+    #     return fn(tree, *rest)
 
 
 def _spread_entry(fn: Callable[[str, Tree[T]], Any]) -> Callable[[TreeEntry], Any]:
@@ -564,8 +661,31 @@ def join(
     if traverser is None:
         traverser = Traverser(is_leaf=is_leaf, include_intermediate=include_intermediate, include=include, descend=descend, parent_first=parent_first)
     entry = TreeEntry(prefix, tree, None, '')
-    oentry = TreeEntry('', other, None, '')
+    oentry = TreeEntry(prefix, other, None, '')
     return entry.join(oentry, traverser=traverser)
+
+
+# noinspection PyShadowingNames
+def join_children(
+    tree: Tree,
+    other: Tree,
+    is_leaf: Optional[Callable] = None,
+    prefix: str = '',
+    traverser: Optional[Traverser] = None,
+    include_intermediate: bool = False,
+    include: Optional[Callable] = None,
+    descend: Optional[Callable] = None,
+    parent_first: bool = False,
+    type: type[T] = None,
+) -> Iterable[tuple[TreeEntry[T], TreeEntry[T]]]:
+    if traverser is None:
+        traverser = Traverser(is_leaf=is_leaf, include_intermediate=include_intermediate, include=include, descend=descend, parent_first=parent_first)
+    entry = TreeEntry(prefix, tree, None, '')
+    oentry = TreeEntry(prefix, other, None, '')
+    for ochild in oentry.children():
+        child = entry.maybe_child(ochild.step)
+        if child is not None:
+            yield from child.join(ochild, traverser)
 
 
 # noinspection PyShadowingNames
@@ -599,12 +719,26 @@ def outer_join(
     include: Optional[Callable] = None,
     descend: Optional[Callable] = None,
     parent_first: bool = False,
+    start_children: bool = False,
 ) -> Iterable[tuple[TreeEntry, Optional[TreeEntry]]]:
     if traverser is None:
         traverser = Traverser(is_leaf=is_leaf, include_intermediate=include_intermediate, include=include, descend=descend, parent_first=parent_first)
-    entry = TreeEntry(prefix, tree, None, '')
-    oentry = TreeEntry('', other, None, '')
-    return outer_join(entry, oentry, traverser=traverser)
+    left = TreeEntry(prefix, tree, None, '')
+    right = TreeEntry('', other, None, '')
+    if start_children:
+        seen = set()
+        if left is not None:
+            for lchild in left.children():
+                seen.add(lchild.step)
+                rchild = None if right is None else right.maybe_child(lchild.step)
+                yield from entry_outer_join(lchild, rchild, traverser, False)
+        lchild = None
+        if right is not None:
+            for rchild in right.children():
+                if rchild.step not in seen:
+                    yield from entry_outer_join(lchild, rchild, traverser, not True)
+    else:
+        yield from entry_outer_join(left, right, traverser=traverser)
 
 
 # noinspection PyShadowingNames
@@ -626,7 +760,6 @@ def traverse(
     include: Optional[TreePredicateFunction] = None,
     descend: Optional[TreePredicateFunction] = None,
     parent_first: bool = True,
-    force_descend: bool = False,
     traverser: Traverser = None,
 ) -> Iterable[TreeEntry[T]]:
     """Flattens a Python tree to a list of key, value tuples.
@@ -656,7 +789,7 @@ def traverse(
 
     Returns:
         List[Tuple[str, Any]]: The flat representation of the Python tree.
-        :param force_descend:
+        :param start_children:
         :param parent_first:
         :param traverser:
         :param tree:
@@ -669,7 +802,62 @@ def traverse(
     if traverser is None:
         traverser = Traverser(is_leaf=is_leaf, include_intermediate=include_intermediate, include=include, descend=descend, parent_first=parent_first)
     entry = TreeEntry(prefix, tree, None, '')
-    return entry.traverse(traverser, force_descend=force_descend)
+    return entry.traverse(traverser)
+
+
+# noinspection PyShadowingNames
+def traverse_children(
+    tree: Tree[T],
+    prefix: str = "",
+    is_leaf: Optional[Callable] = None,
+    include_intermediate: bool = False,
+    include: Optional[TreePredicateFunction] = None,
+    descend: Optional[TreePredicateFunction] = None,
+    parent_first: bool = True,
+    traverser: Traverser = None,
+) -> Iterable[TreeEntry[T]]:
+    """Flattens a Python tree to a list of key, value tuples.
+
+    The keys are using the dot notation to define trees of arbitrary depth and
+    complexity.
+
+    .. code-block:: python
+
+        from mlx.utils import tree_flatten
+
+        print(tree_flatten([[[0]]]))
+        # [("0.0.0", 0)]
+
+        print(tree_flatten([[[0]]], ".hello"))
+        # [("hello.0.0.0", 0)]
+
+    .. note::
+       Dictionaries should have keys that are valid Python identifiers.
+
+    Args:
+        tree (Any): The Python tree to be flattened.
+        prefix (str): A prefix to use for the keys. The first character is
+            always discarded.
+        is_leaf (callable): An optional callable that returns True if the
+            passed object is considered a leaf or False otherwise.
+
+    Returns:
+        List[Tuple[str, Any]]: The flat representation of the Python tree.
+        :param start_children:
+        :param parent_first:
+        :param traverser:
+        :param tree:
+        :param prefix:
+        :param is_leaf:
+        :param descend:
+        :param include:
+        :param include_intermediate:
+    """
+    if traverser is None:
+        traverser = Traverser(is_leaf=is_leaf, include_intermediate=include_intermediate, include=include, descend=descend, parent_first=parent_first)
+    entry = TreeEntry(prefix, tree, None, '')
+    for child in entry.children():
+        yield from child.traverse(traverser)
 
 
 def map_value(fn: Callable) -> Callable[[TreeEntry], Any]:
@@ -696,14 +884,33 @@ def filter(
     include: Optional[TreePredicateFunction] = None,
     descend: Optional[TreePredicateFunction] = None,
     parent_first: bool = True,
-    force_descend: bool = False,
+    start_children: bool = False,
     traverser: Traverser = None,
 ) -> Tree[T]:
     if traverser is None:
         traverser = Traverser(is_leaf=is_leaf, include_intermediate=include_intermediate, include=include, descend=descend, parent_first=parent_first)
     entry = TreeEntry(prefix, tree, None, '')
     map_fn = value_transform if map_fn is None else map_value(map_fn)
-    return entry.unflat(map_fn=map_fn, traverser=traverser, force_descend=force_descend)
+    return entry.unflat(map_fn=map_fn, traverser=traverser, force_descend=start_children)
+
+
+# noinspection PyShadowingBuiltins,PyShadowingNames
+def filter_children(
+    tree: Tree[T],
+    prefix: str = "",
+    map_fn: Optional[Callable[[Any], Any]] = None,
+    is_leaf: Optional[TreePredicateFunction] = None,
+    include_intermediate: bool = False,
+    include: Optional[TreePredicateFunction] = None,
+    descend: Optional[TreePredicateFunction] = None,
+    parent_first: bool = True,
+    traverser: Traverser = None,
+) -> Tree[T]:
+    if traverser is None:
+        traverser = Traverser(is_leaf=is_leaf, include_intermediate=include_intermediate, include=include, descend=descend, parent_first=parent_first)
+    entry = TreeEntry(prefix, tree, None, '')
+    map_fn = value_transform if map_fn is None else map_value(map_fn)
+    return entry.unflat(map_fn=map_fn, traverser=traverser, force_descend=True)
 
 
 # noinspection PyShadowingNames
@@ -750,12 +957,11 @@ def flatten(
     descend: TreePredicateFunction = None,
     include_intermediate: bool = False,
     parent_first: bool = True,
-    force_descend: bool = False,
     traverser: Traverser = None,
 ) -> list[TreeEntry[T]]:
     if traverser is None:
         traverser = Traverser(is_leaf=is_leaf, include_intermediate=include_intermediate, include=include, descend=descend, parent_first=parent_first)
-    return list(traverse(tree, prefix=prefix, traverser=traverser, force_descend=force_descend))
+    return list(traverse(tree, prefix=prefix, traverser=traverser))
 
 
 # noinspection PyShadowingNames
@@ -977,6 +1183,83 @@ def join_mangle(tree: Tree, join: Tree[T] = None) -> ResultList[T]:
     extracted: ResultList[T] = []
     _join(tree, join, extracted)
     return extracted
+
+
+def get_one(p: list|dict, k: str, default=None):
+    if isinstance(p, list):
+        i = int(k)
+        if i < 0:
+            return p[i]
+        return None
+    elif isinstance(p, dict):
+        return p.get(k, default)
+    else:
+        raise TypeError(f'Cannot put value at path {k} in {p}')
+
+
+def put_one(p: list|dict, k: str):
+    if isinstance(p, list):
+        i = int(k)
+        if i >= len(p):
+            p.extend([{} for _ in range(i - len(p) + 1)])
+        return p[i]
+    elif isinstance(p, dict):
+        return p.setdefault(k, {})
+    else:
+        raise TypeError(f'Cannot put value at path {k} in {p}')
+
+
+def put_path(p: dict, k: str, v: Any, undo: str):
+    dot = k.find('.')
+    while dot >= 0:
+        p = put_one(p, k[:dot])
+        k = k[dot+1:]
+        dot = k.find('.')
+    if p is v:
+        p[undo] = v
+    else:
+        p[k] = v
+
+
+def move_path(p: dict, src: str, dst: str):
+    put_path(p, dst, pop_path(p, src), src)
+
+
+def contains_path(p: dict, k: str):
+    dot = k.find('.')
+    while dot >= 0:
+        p = get_one(p, k[:dot])
+        if p is None or not isinstance(p, (dict, list)): return False
+        k = k[dot+1:]
+        dot = k.find('.')
+    return k in p
+
+
+def get_path(p: dict, k: str, default: Any = None):
+    dot = k.find('.')
+    while dot >= 0:
+        p = get_one(p, k[:dot])
+        if p is None or not isinstance(p, (dict, list)): return default
+        k = k[dot+1:]
+        dot = k.find('.')
+    return get_one(p, k, default)
+
+
+def pop_path(p: dict, k: str, default: Any = None):
+    dot = k.find('.')
+    while dot >= 0:
+        p = get_one(p, k[:dot])
+        if p is None or not isinstance(p, (dict, list)): return default
+        k = k[dot+1:]
+        dot = k.find('.')
+    if isinstance(p, list):
+        i = int(k)
+        if i < 0:
+            v = p[i]
+            p[i] = {}
+            return v
+        return default
+    return p.pop(k, default)
 
 
 tree_entries = traverse

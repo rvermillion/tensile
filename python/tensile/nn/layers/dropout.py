@@ -1,5 +1,4 @@
 #  Copyright (c) 2026. Richard Vermillion. All Rights Reserved.
-
 from ...infra.util import name_function
 from ...infra.function import identity
 from ..common import *
@@ -11,7 +10,7 @@ def dropout_type(d: int) -> str:
 
 
 @provides(Module, 'dropout')
-class Dropout(CompiledModule):
+class Dropout(FunctionModule):
     r"""Randomly zero a portion of the elements during training.
 
     The dimensionality d can be 1, 2 or 3.
@@ -111,18 +110,18 @@ class Dropout(CompiledModule):
     def _extra_structure(self) -> str:
         return self._repr_args()
 
-    def build_call(self, train: bool = False, **options) -> Callable:
+    def build_call(self, mode: CompiledModule.Mode, **options) -> Functional:
         d = self.d
         notp = self.notp
-        if train or notp == 1:
+        if mode.is_train() or notp == 1:
             scale = 1 / notp
 
             if d == 1:
-                def call(x: Array) -> Array:
+                def call(x: Array, /) -> Array:
                     mask = ten.random.bernoulli(p=notp, shape=x.shape)
                     return (mask * x) * scale
             elif d == 2:
-                def call(x: Array) -> Array:
+                def call(x: Array, /) -> Array:
                     if x.ndim not in (3, 4):
                         raise ValueError(
                             f"Received input with {x.ndim} dimensions. Expected 3 or 4 dimensions."
@@ -137,7 +136,7 @@ class Dropout(CompiledModule):
                     mask = ten.random.bernoulli(p=notp, shape=mask_shape)
                     return (mask * x) * scale
             elif d == 3:
-                def call(x: Array) -> Array:
+                def call(x: Array, /) -> Array:
                     if x.ndim not in (4, 5):
                         raise ValueError(
                             f"Received input with {x.ndim} dimensions. Expected 4 or 5 dimensions."
