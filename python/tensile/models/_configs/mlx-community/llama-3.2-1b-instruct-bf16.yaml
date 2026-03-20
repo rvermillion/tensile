@@ -1,0 +1,54 @@
+name: Llama-3.2-1B-Instruct-bf16
+org: mlx-community
+kind: default
+#repo: hf:mlx-community/Llama-3.2-1B-Instruct-bf16
+model_type: llama
+dtype: bfloat16
+lm:
+  vocab_size: 128256
+  hidden_dim: 2048
+  layers:
+    count: 16
+    _:
+      kind: transformer
+      attention:
+        kind: normed
+        pre_norm:
+          kind: rms
+          dims: 2048
+          eps: 1.0e-05
+        body:
+          kind: attention.standard
+          num_attention_heads: 32
+          num_key_value_heads: 8
+          head_dim: 64
+          bias: false
+          position_encoder:
+            kind: rope-llama3
+            traditional: false
+            dims: 64
+            max_positions: 131072
+            base: 500000.0
+            scaling:
+              factor: 32.0
+              high_freq_factor: 4.0
+              low_freq_factor: 1.0
+              original_max_position_embeddings: 8192
+              rope_type: llama3
+      mlp:
+        kind: normed
+        pre_norm:
+          kind: rms
+          dims: 2048
+          eps: 1.0e-05
+        body:
+          kind: mlp.glu
+          activation: silu
+          bias: false
+          in_dim: 2048
+          hidden_dim: 8192
+          out_dim: 2048
+  norm:
+    kind: rms
+    dims: 2048
+    eps: 1.0e-05

@@ -1,0 +1,56 @@
+name: qwen2.5-7b-instruct-8bit
+kind: default
+repo: hf:mlx-community/qwen2.5-7b-instruct-8bit
+model_type: qwen2
+dtype: bfloat16
+quantization:
+  group_size: 64
+  bits: 8
+lm:
+  vocab_size: 152064
+  hidden_dim: 3584
+  layers:
+    count: 28
+    _:
+      kind: transformer
+      attention:
+        kind: normed
+        pre_norm:
+          kind: rms
+          dims: 3584
+          eps: 1.0e-06
+        body:
+          kind: attention.standard
+          num_attention_heads: 28
+          num_key_value_heads: 4
+          head_dim: 128
+          bias: true
+          position_encoder:
+            kind: rope
+            traditional: false
+            dims: 128
+            max_positions: 32768
+            base: 1000000.0
+          o_proj:
+            kind: linear
+            bias: false
+      mlp:
+        kind: normed
+        pre_norm:
+          kind: rms
+          dims: 3584
+          eps: 1.0e-06
+        body:
+          kind: mlp.glu
+          activation: silu
+          bias: false
+          in_dim: 3584
+          hidden_dim: 18944
+          out_dim: 3584
+  norm:
+    kind: rms
+    dims: 3584
+    eps: 1.0e-06
+lm_head:
+  kind: linear
+  bias: false
