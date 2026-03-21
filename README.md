@@ -12,7 +12,13 @@ The goal is not just backend portability. It is to make model building, training
 
 If you work across Apple Silicon and CUDA, the pain is familiar: the same ideas turn into different code because gradients, optimizer updates, execution semantics, and module APIs do not line up cleanly between backends. Tensile sits underneath your code and normalizes those differences so you can focus on the experiment rather than the plumbing.
 
-SwitchModule backends with an environment variable:
+Install the package:
+
+```bash
+pip install tensile-ml`
+```
+
+Switch backends with an environment variable:
 
 ```bash
 TENSILE=mlx python train.py
@@ -77,43 +83,67 @@ model = Model.coerce(yaml.safe_load(model_filename))
 To create a model with the architecture to run `qwen2.5-7b-instruct-8bit`, you can use the following YAML:
 
 ```yaml
+name: qwen2.5-7b-instruct-8bit
+org: mlx-community
 kind: language
-model:
+repo: hf:mlx-community/qwen2.5-7b-instruct-8bit
+model_type: qwen2
+dtype: bfloat16
+quantization:
+  group_size: 64
+  bits: 8
+lm:
   vocab_size: 152064
-  hidden_size: 3584
+  hidden_dim: 3584
+  window_size: 131072
   layers:
     count: 28
     _:
       kind: transformer
-      input_layernorm:
-        kind: rms
-        eps: 1e-06
       attention:
-        kind: standard
-        num_attention_heads: 28
-        num_key_value_heads: 4
-        bias: true
-        o_proj:
-          bias: false
-        position_encoder:
-          kind: rope
-          traditional: false
-          max_positions: 32768
-          base: 1000000.0
+        kind: normed
+        pre_norm:
+          kind: rms
+          dims: 3584
+          eps: 1.0e-06
+        body:
+          kind: attention.standard
+          num_attention_heads: 28
+          num_key_value_heads: 4
+          head_dim: 128
+          bias: true
+          position_encoder:
+            kind: rope
+            traditional: false
+            dims: 128
+            max_positions: 32768
+            base: 1000000.0
+          o_proj:
+            kind: linear
+            bias: false
       mlp:
-        kind: glu
-        activation: silu
-        bias: false
-        hidden_dim: 18944
-      post_attention_layernorm:
-        kind: rms
-        eps: 1e-06
+        kind: normed
+        pre_norm:
+          kind: rms
+          dims: 3584
+          eps: 1.0e-06
+        body:
+          kind: mlp.glu
+          activation: silu
+          bias: false
+          in_dim: 3584
+          hidden_dim: 18944
+          out_dim: 3584
   norm:
     kind: rms
-    eps: 1e-06
+    dims: 3584
+    eps: 1.0e-06
 lm_head:
   kind: linear
   bias: false
+cache:
+  kind: sliding_window
+  window_size: 131072
 ```
 
 There is no need to write boilerplate code for each model type. The model is constructed with the right architecture based on the config.  For a Llama 3 model, you would change the parameters, including the position_encoder to be:
@@ -132,6 +162,8 @@ There is no need to write boilerplate code for each model type. The model is con
 ```
 
 And that's it, no re-implementing every part of the model to make sure that the right RoPE implementation is used.
+
+One thing that's nice about this approach is that `tensile` module config files actually document the model architecture quite a bit more than just the raw HuggingFace config file. There are tools to help convert new models to the `tensile` format, but this is a work in progress.
 
 The same pattern works for optimizers:
 
