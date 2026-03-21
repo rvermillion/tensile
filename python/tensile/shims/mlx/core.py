@@ -153,6 +153,8 @@ else:
         softmax,
     )
 
+from mlx.nn import softplus
+
 
 concat = concatenate
 
