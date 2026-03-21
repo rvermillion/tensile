@@ -26,7 +26,6 @@ class TorchBackend(Protocol):
 TorchBackendFactory = Callable[..., TorchBackend]
 
 
-
 @provides(Optimizer, 'torch')
 class TorchOptimizer(Optimizer[Batch]):
 
@@ -81,17 +80,21 @@ class TorchOptimizer(Optimizer[Batch]):
                 if schedule := param_group.schedules.get(step, include_constant=False):
                     backend_group.update(schedule)
 
-    @property
-    def lr(self) -> float:
-        lr = self.learning_rate
-        if callable(lr):
-            return lr(self.current_step).item()
-        elif isinstance(lr, float):
-            return lr
-        return 0.
-
     def trainable_parameter_list(self, group: int = None) -> list[Array]:
         return list(v for p, v in tree.flatten(self.trainable_parameters(group=group)))
+
+    def auxloss_train_fn(self, train_fn: TrainFunction[Batch]) -> TrainFunction[Batch]:
+        auxloss_instruments = self.get_auxloss_instruments()
+        if auxloss_instruments:
+            def auxloss_train_fn(batch: Batch) -> Array:
+                loss = train_fn(batch)
+                for aux_loss in auxloss_instruments:
+                    loss += aux_loss.compute()
+                return loss
+
+            return auxloss_train_fn
+        else:
+            return train_fn
 
     def stepper(self, train_fn: TrainFunction[Batch],  *,
                 grad_handlers: list[GradientHandler] = None,
@@ -115,6 +118,8 @@ class TorchOptimizer(Optimizer[Batch]):
             def optimizer_step() -> None:
                 for opt in optimizers:
                     opt.step()
+
+        train_fn = self.auxloss_train_fn(train_fn)
 
         def step(batch: Batch) -> Array:
             # x, y = batch.data
@@ -163,7 +168,7 @@ class TorchOptimizer(Optimizer[Batch]):
             torch.save(state, p)
 
 
-
+# noinspection PyTypeChecker
 backend_factories: dict[str, TorchBackendFactory] = {
     'adadelta': optim.Adadelta,
     'adafactor': optim.Adafactor,

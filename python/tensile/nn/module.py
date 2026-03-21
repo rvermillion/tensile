@@ -58,13 +58,13 @@ def is_leaf_module_entry(entry: TreeEntry) -> bool:
     return False
 
 
-is_leaf_module_traverser = tree.Traverser(include=is_leaf_module_entry)
-is_own_traverser = tree.Traverser(descend=not_module_entry)
-is_parameter_traverser = tree.Traverser(include=is_parameter_entry)
-is_own_parameter_traverser = tree.Traverser(include=is_parameter_entry, descend=not_module_entry)
-is_trainable_parameter_traverser = tree.Traverser(include=is_trainable_parameter_entry)
-is_own_trainable_parameter_traverser = tree.Traverser(include=is_trainable_parameter_entry, descend=not_module_entry)
-is_module_traverser = tree.Traverser(include=is_module_entry)
+leaf_module_traverser = tree.Traverser(include=is_leaf_module_entry)
+own_traverser = tree.Traverser(descend=not_module_entry)
+parameter_traverser = tree.Traverser(include=is_parameter_entry)
+own_parameter_traverser = tree.Traverser(include=is_parameter_entry, descend=not_module_entry)
+trainable_parameter_traverser = tree.Traverser(include=is_trainable_parameter_entry)
+own_trainable_parameter_traverser = tree.Traverser(include=is_trainable_parameter_entry, descend=not_module_entry)
+module_traverser = tree.Traverser(include=is_module_entry)
 child_traverser = tree.Traverser(include=is_module_entry, descend=not_module_entry)
 
 
@@ -104,7 +104,7 @@ def apply_to_modules(root: Tree,
     """
     fixed_fn = fix_apply_fn(apply_fn, spread=spread, just_value=just_value)
     if include is None:
-        tree.apply(root, fixed_fn, traverser=is_module_traverser)
+        tree.apply(root, fixed_fn, traverser=module_traverser)
     else:
         tree.apply(root, fixed_fn, include=is_module_entry & include)
 
@@ -469,10 +469,10 @@ class Module(Object, tree.TreeNode[ModuleTreeValue]):
 
     def _set_requires_grad(self, requires_grad: bool):
         if requires_grad:
-            for path, param in tree.traverse_children(self, traverser=is_own_parameter_traverser):
+            for path, param in tree.traverse_children(self, traverser=own_parameter_traverser):
                 ten.require_grad(param, path not in self._no_grad)
         else:
-            for path, param in tree.traverse_children(self, traverser=is_own_parameter_traverser):
+            for path, param in tree.traverse_children(self, traverser=own_parameter_traverser):
                 ten.require_grad(param, False)
 
     # def _set_training_mode(self, mode: bool) -> None:
@@ -564,7 +564,7 @@ class Module(Object, tree.TreeNode[ModuleTreeValue]):
         """
         fixed_fn = fix_apply_fn(apply_fn, spread=spread, just_value=just_value)
         if include is None:
-            tree.apply(self, fixed_fn, traverser=is_module_traverser)
+            tree.apply(self, fixed_fn, traverser=module_traverser)
         else:
             tree.apply(self, fixed_fn, include=is_parameter_entry & include)
         return self
@@ -589,7 +589,7 @@ class Module(Object, tree.TreeNode[ModuleTreeValue]):
         return apply_to_modules(self, apply_fn, spread=spread, just_value=just_value, include=include)
 
     def update_modules(self, modules: dict, strict: bool = True) -> Self:
-        for a, b in tree.join(self, modules, traverser=is_module_traverser):
+        for a, b in tree.join(self, modules, traverser=module_traverser):
             new_value = b.value
             if is_module(new_value):
                 a.replace(new_value)
@@ -602,7 +602,7 @@ class Module(Object, tree.TreeNode[ModuleTreeValue]):
 
     def leaf_modules(self) -> tree.Tree['Module']:
         """Return the submodules that do not contain other modules."""
-        return tree.filter(self, traverser=is_leaf_module_traverser)
+        return tree.filter(self, traverser=leaf_module_traverser)
 
     def modules(self) -> list['Module']:
         """Return a list with all the modules in this instance.
@@ -681,7 +681,7 @@ class Module(Object, tree.TreeNode[ModuleTreeValue]):
     def _freeze(self, keys: list[str] = None, strict: bool = False):
         if keys is None:
             local_keys = []
-            for e in tree.traverse_children(self, traverser=is_own_parameter_traverser):
+            for e in tree.traverse_children(self, traverser=own_parameter_traverser):
                 local_keys.append(e.step)
         else:
             local_keys = keys
@@ -750,17 +750,17 @@ class Module(Object, tree.TreeNode[ModuleTreeValue]):
         """Recursively return all the :class:`mlx.core.array` members of this Module
         as a dict of dicts and lists."""
         if own:
-            return tree.filter_children(self, traverser=is_own_parameter_traverser)
+            return tree.filter_children(self, traverser=own_parameter_traverser)
         else:
-            return tree.filter(self, traverser=is_parameter_traverser)
+            return tree.filter(self, traverser=parameter_traverser)
 
     def trainable_parameters(self, own: bool = False) -> tree.Tree[ten.Array]:
         """Recursively return all the non frozen :class:`mlx.core.array` members of
         this Module as a dict of dicts and lists."""
         if own:
-            return tree.filter_children(self, traverser=is_own_trainable_parameter_traverser)
+            return tree.filter_children(self, traverser=own_trainable_parameter_traverser)
         else:
-            return tree.filter(self, traverser=is_trainable_parameter_traverser)
+            return tree.filter(self, traverser=trainable_parameter_traverser)
 
     def children(self) -> tree.Tree['Module']:
         """Return the direct descendants of this Module instance."""
@@ -826,7 +826,7 @@ class Module(Object, tree.TreeNode[ModuleTreeValue]):
             :param remap:
         """
 
-        for a, b in tree.join(self, parameters, traverser=is_parameter_traverser):
+        for a, b in tree.join(self, parameters, traverser=parameter_traverser):
             new_value = b.value
             if ten.is_array(new_value):
                 a.replace(new_value)
@@ -1192,6 +1192,29 @@ class CompiledModule(Module):
 class Functional(Protocol):
 
     def __call__(self, x: Array, /) -> Array: ...
+
+
+def slice_functional(func: Functional, start: int = 0, end: int = None) -> Functional:
+    concat = ten.concatenate
+    if start != 0:
+        if end is None:
+            def sliced_func(x: Array, /) -> Array:
+                y = func(x[..., start:])
+                return concat([x[..., :start], y], axis=-1)
+        elif start < end:
+            def sliced_func(x: Array, /) -> Array:
+                y = func(x[..., start:end])
+                return concat([x[..., :start], y, x[..., end:]], axis=-1)
+        else:
+            raise ValueError('start must be less than end or end must be None')
+    elif end is None:
+        sliced_func = func
+    else:
+        def sliced_func(x: Array, /) -> Array:
+            y = func(x[..., :end])
+            return concat([y, x[..., end:]], axis=-1)
+
+    return sliced_func
 
 
 class FunctionModule(CompiledModule):

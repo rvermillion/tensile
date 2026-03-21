@@ -1,4 +1,5 @@
 #  Copyright (c) 2026. Richard Vermillion. All Rights Reserved.
+from typing import final
 
 from .common import *
 
@@ -80,6 +81,13 @@ class Instrument(Object):
     def __hash__(self):
         return hash(self._eq_tuple())
 
+    @final
+    def __bool__(self) -> bool:
+        return True
+
+    def __len__(self) -> int:
+        return 1
+
     def _eq_tuple(self) -> tuple:
         return self.__class__, self.instrument
 
@@ -108,6 +116,10 @@ class Instrument(Object):
     def remove(self, where: Predicate['Instrument'] = None) -> Optional['Instrument']:
         if where is None or where(self): return None
         return self
+
+    def find(self, where: Predicate['Instrument'] = None) -> Iterable['Instrument']:
+        if where is None or where(self): return self,
+        return ()
 
     @classmethod
     def compose(cls, a: Optional[InstrumentLike], b: Optional[InstrumentLike]) -> 'Instrument':
@@ -185,12 +197,12 @@ class CompositeInstrument(Instrument):
         return wrapped
 
     def get_subinstrument(self, name: str) -> Optional['Instrument']:
-        subinstruments = [inst.get_subinstrument(name) for inst in self.instruments]
-        subinstruments.append(self.subinstruments.get(name))
-        subinstruments = tuple(inst for inst in subinstruments if inst is not None)
-        if subinstruments:
-            if len(subinstruments) == 1: return subinstruments[0]
-            return CompositeInstrument(instruments=subinstruments)
+        subs = [inst.get_subinstrument(name) for inst in self.instruments]
+        subs.append(self.subinstruments.get(name))
+        subs = tuple(inst for inst in subs if inst is not None)
+        if subs:
+            if len(subs) == 1: return subs[0]
+            return CompositeInstrument(instruments=subs)
         return None
 
     def remove_subinstrument(self, name: str, where: Predicate['Instrument'] = None) -> Optional['Instrument']:
@@ -210,8 +222,16 @@ class CompositeInstrument(Instrument):
             return CompositeInstrument(instruments=instruments)
         return None
 
+    def find(self, where: Predicate['Instrument'] = None) -> Iterable['Instrument']:
+        if where is None or where(self): yield self
+        for inst in self.instruments:
+            yield from inst.find(where)
+
     def _eq_tuple(self) -> tuple:
         return self.instruments
+
+    def __len__(self) -> int:
+        return len(self.instruments)
 
     def __contains__(self, item):
         return item == self or any(item in inst for inst in self.instruments)

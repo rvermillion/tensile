@@ -63,19 +63,24 @@ class MLXOptimizer(Optimizer[Batch]):
 
     def loss_and_grad_fn(self, model: Module, train_fn: TrainFunction[Batch]) -> LossAndGradFunction[Batch]:
 
-        def inner_fn(params, batch: Batch) -> Array:
-            # print('inner model.embed_tokens.weight:', id(params['model']['embed_tokens']['weight']))
-            model.update(params)
-            return train_fn(batch)
+        aux_loss_instruments = self.get_auxloss_instruments(model)
+        if aux_loss_instruments:
+            def inner_fn(params, batch: Batch) -> Array:
+                model.update(params)
+                loss = train_fn(batch)
+                for aux_loss in aux_loss_instruments:
+                    loss += aux_loss.compute()
+                return loss
+        else:
+            def inner_fn(params, batch: Batch) -> Array:
+                model.update(params)
+                return train_fn(batch)
 
         value_grad_fn = mx.value_and_grad(inner_fn)
 
-        # @wraps(fn)
         def wrapped_value_grad_fn(batch: Batch) -> tuple[Array, Any]:
             params = self.trainable_parameters(model)
-            # print('wrapped model.embed_tokens.weight:', id(params['model']['embed_tokens']['weight']))
             value, grad = value_grad_fn(params, batch)
-            # ten.debug_eval(value, grad)
             return value, grad
 
         return wrapped_value_grad_fn

@@ -22,7 +22,9 @@ from ..common import *
 from ..infra import RootObject
 from ..infra.util import StringBuffer, process_specs
 from ..nn import Module
-from ..nn.traverse import is_trainable_parameter_traverser
+from ..nn.instruments.loss import AuxLossInstrument
+from ..nn.module import module_traverser
+from ..nn.traverse import trainable_parameter_traverser
 from .schedule import LRSchedule, OptimizerSchedule
 from .types import (
     GradientHandler, OptimizerStep, OptimizerStepHandler, TrainFunction, Batch,
@@ -202,7 +204,7 @@ class OptimizerConfig(Object):
 
 
 
-def filter_tree(arrays: tree.Tree[Array], paths: Container[str]) -> tree.Tree[Array]:
+def filter_tree(arrays: tree.Tree[Array|Module], paths: Container[str]) -> tree.Tree[Array]:
     """Filter a parameter or gradient tree down to a set of named paths."""
     return tree.filter(arrays, include=lambda e: e.path in paths and ten.is_array(e.value))
 
@@ -257,11 +259,11 @@ class OptimizerParamGroup(Object):
         """Expose the schedule registry from the resolved config."""
         return self.config.schedules
 
-    def filter_tree(self, arrays: tree.Tree[Array]) -> tree.Tree[Array]:
+    def filter_tree(self, arrays: tree.Tree[Array|Module]) -> tree.Tree[Array]:
         """Return only entries belonging to this parameter group."""
         return filter_tree(arrays, self.params)
 
-    def filter_params(self, arrays: tree.Tree[Array]) -> list[Array]:
+    def filter_params(self, arrays: tree.Tree[Array|Module]) -> list[Array]:
         """Extract this group's arrays from a tree as a flat list."""
         group_paths = self.params
         params = []
@@ -386,7 +388,7 @@ class Optimizer(Object, Generic[Batch]):
             candidate_params = self.params
             if not candidate_params:
                 candidate_params = set()
-                for param, value in tree.traverse(self.model, traverser=is_trainable_parameter_traverser):
+                for param, value in tree.traverse(self.model, traverser=trainable_parameter_traverser):
                     candidate_params.add(param)
             param_group_specs = list(spec)
             used_params = set()
@@ -537,6 +539,16 @@ class Optimizer(Object, Generic[Batch]):
     def _save(self, path: str|Path, **kwargs) -> None:
         """Save the optimizer state to a file."""
         raise NotImplementedError()
+
+    def get_auxloss_instruments(self, model: Module = None) -> list[AuxLossInstrument]:
+        mod: Module
+
+        if model is None: model = self.model
+        instruments = []
+        for path, mod in tree.traverse(model, traverser=module_traverser):
+            if inst := mod.instrument:
+                instruments.extend(inst.find(predicates.is_instance(AuxLossInstrument)))
+        return instruments
 
     def get_hyperparameters(self, group: int = None) -> dict[str, Any]:
         step = self.current_step
