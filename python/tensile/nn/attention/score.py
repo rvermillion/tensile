@@ -194,67 +194,6 @@ def sdpa_attention_scorer(queries: Array, keys_t: Array, qs: Optional[slice], kv
     return ten.matmul(queries, keys_t)
 
 
-@provides(AttentionScorer, 'gated')
-class GatedAttentionScorer(CompiledModule):
-
-    __slots__ = ('alpha', 'gate_dim', 'extra_gate')
-
-    alpha: Annotated[Array, field(
-        parameter=True,
-    )]
-    gate_dim: Annotated[int, field(
-        default=16,
-    )]
-    extra_gate: Annotated[bool, field(
-        default=True,
-    )]
-
-    def init_from_args(self, args: ModuleArgs):
-        super().init_from_args(args)
-
-        # self.gate_dim = args.get('gate_dim', default=16)
-        self.alpha = ten.array(args.get('alpha', default=1.))
-        self.gate_dim = args.get('gate_dim', default=16)
-        self.extra_gate = args.get('extra_gate', default=True)
-
-    def build_call(self, mode: CompiledModule.Mode, **options) -> AttentionScorer:
-        if self.extra_gate:
-
-            # noinspection PyUnusedLocal
-            def call(queries: Array, keys_t: Array, qs: slice, ks: slice, /, offset: int = 0, q_gate: Array = None, k_gate_t: Array = None, **extra) -> Array:
-
-                score = ten.matmul(queries, keys_t)
-
-                # We have to slice the gate arrays to match the query and key shapes.
-                qg = q_gate[..., qs, :]
-                kgt = k_gate_t[..., ks]
-
-                gate = ten.matmul(qg, kgt)
-
-                return  score * self.alpha * ten.sigmoid(gate)
-
-        else:
-            gate_dim = self.gate_dim
-
-            # noinspection PyUnusedLocal
-            def call(queries: Array, keys_t: Array, qs: slice, ks: slice, /, offset: int = 0, **extra) -> Array:
-
-                qg = queries[..., :gate_dim]
-                kgt = keys_t[..., :gate_dim, :]
-
-                q = queries[..., gate_dim:]
-                kt = keys_t[..., gate_dim:, :]
-
-                score = ten.matmul(q, kt)
-
-                gate = ten.matmul(qg, kgt)
-
-                return  score * self.alpha * ten.sigmoid(gate)
-
-
-        return call
-
-
 __all__ = [
     'AttentionScores',
     'AttentionScoresFactory',
