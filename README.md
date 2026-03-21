@@ -15,8 +15,10 @@ If you work across Apple Silicon and CUDA, the pain is familiar: the same ideas 
 Install the package:
 
 ```bash
-pip install tensile-ml`
+pip install tensile-ml
 ```
+
+Coming soon, for now you can `pip install -e .` from the repo root.
 
 Switch backends with an environment variable:
 
