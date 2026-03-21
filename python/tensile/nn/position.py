@@ -44,6 +44,10 @@ class PositionEncoder(CompiledModule):
 
     Args = PositionEncoderArgs
 
+    if TYPE_CHECKING:
+
+        __call__: EncodePosition
+
 
 def identity_encoder(x: Array, offset: int = 0) -> Array:
     return x
@@ -60,6 +64,15 @@ class Identity(PositionEncoder):
 rope_cache: dict[tuple, EncodePosition] = {}
 
 
+def shift_encode(encode: EncodePosition, shift: int) -> EncodePosition:
+    if shift > 0:
+        def shifted_encode(x: Array, offset: int = 0) -> Array:
+            encoded = encode(x[..., shift:], offset=offset)
+            return ten.concatenate([x[..., :shift], encoded], axis=-1)
+        return shifted_encode
+    return encode
+
+
 def build_rope_call(dims: int, traditional: bool = False, base: float = 10000, scale: float = 1.0,
                     shift: int = 0) -> EncodePosition:
     try:
@@ -68,30 +81,20 @@ def build_rope_call(dims: int, traditional: bool = False, base: float = 10000, s
 
         rope = ten.fast.rope
 
-        if shift == 0:
-            def call(x: Array, offset: int = 0) -> Array:
-                # noinspection PyTypeChecker
-                return rope(
-                    x,
-                    dims,
-                    traditional=traditional,
-                    base=base,
-                    scale=scale,
-                    offset=offset,
-                )
-        else:
-            rem = dims - shift
+        rem = dims - shift
 
-            def call(x: Array, offset: int = 0) -> Array:
-                # noinspection PyTypeChecker
-                return rope(
-                    x[..., shift:],
-                    rem,
-                    traditional=traditional,
-                    base=base,
-                    scale=scale,
-                    offset=offset,
-                )
+        def call(x: Array, offset: int = 0) -> Array:
+            # noinspection PyTypeChecker
+            return rope(
+                x,
+                rem,
+                traditional=traditional,
+                base=base,
+                scale=scale,
+                offset=offset,
+            )
+
+        call = shift_encode(call, shift)
 
         rope_cache[dims, traditional, base, scale, shift] = call
 
@@ -101,9 +104,10 @@ def build_rope_call(dims: int, traditional: bool = False, base: float = 10000, s
 def build_fast_rope_call(dims: int, *, traditional: bool, base: float|None, scale: float,
                          mscale: float = 1.0,
                          freqs: Optional[Array] = None) -> EncodePosition:
+    rope = ten.fast.rope
     if mscale == 1.0:
         def call(x, offset=0):
-            return ten.fast.rope(
+            return rope(
                 x,
                 dims,
                 traditional=traditional,
@@ -115,7 +119,7 @@ def build_fast_rope_call(dims: int, *, traditional: bool, base: float|None, scal
     else:
         def call(x, offset=0):
             x[..., :dims] = mscale * x[..., :dims]
-            return ten.fast.rope(
+            return rope(
                 x,
                 dims,
                 traditional=traditional,
