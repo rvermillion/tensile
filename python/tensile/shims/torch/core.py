@@ -1,6 +1,8 @@
 #  Copyright (c) 2025-2026. Richard Vermillion. All Rights Reserved.
 import contextlib
 from pathlib import Path
+
+import numpy as np
 from typing import Any, Callable, Sequence, TypeAlias, TypeGuard, TypeVar, Union
 
 import torch
@@ -85,7 +87,7 @@ from torch import (
     tensor,
     zeros, zeros_like, ones, ones_like, full, full_like, empty, empty_like,
     arange, reshape,
-    abs, square, sqrt, exp, log, expm1, sin, cos, tan, sigmoid,
+    abs, square, sqrt, exp, log, expm1, sin, cos, tan, sigmoid, sign,
     median, std, var, quantile,
     pi,
     addmm,
@@ -143,6 +145,10 @@ def dtype(dt: str|DType) -> DType:
 # noinspection PyShadowingNames
 def parameter(x: Array) -> Array:
     return Parameter(x)
+
+
+def to_numpy(x: Array) -> np.ndarray:
+    return x.detach().cpu().numpy()
 
 
 def detach(a: Array) -> Array:
@@ -373,8 +379,8 @@ def sum(a: ArrayLike, axis: Axes = None, keepdims: bool = False, dtype: DType = 
 
 
 # noinspection PyShadowingBuiltins
-def norm(a: ArrayLike, axis: Axes = None, keepdims: bool = False, dtype: DType = None) -> Array:
-    return torch.norm(ensure(a), dim=axis, keepdim=keepdims, dtype=dtype)
+def norm(a: ArrayLike, ord:int|str|None=None, axis: Axes = None, keepdims: bool = False, dtype: DType = None) -> Array:
+    return torch.linalg.norm(ensure(a), ord=ord, dim=axis, keepdim=keepdims, dtype=dtype)
 
 
 # noinspection PyShadowingBuiltins

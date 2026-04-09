@@ -85,7 +85,7 @@ from mlx.core import (
     full,
     eye, trace,
     arange, concatenate, reshape, repeat,
-    abs, square, sqrt, exp, log, expm1, cos, sin, tan, sigmoid,
+    abs, square, sqrt, exp, log, expm1, cos, sin, tan, sigmoid, sign,
     sum, max, min, mean, std, var, logsumexp, prod,
     cumsum, cumprod, cummax, cummin,
     clip, pi,
@@ -200,12 +200,17 @@ def compile(**kwargs) -> Callable[[C], C]:
     return decorate
 
 
-
 def broadcast_shapes(a: ArrayLike, b: ArrayLike) -> Shape:
     return mx.broadcast_to(mx.array(a), b.shape).shape
 
-def norm(a: ArrayLike, axis: Axes = None, dtype: DType = None, keepdims: bool = False, **kwargs) -> Array:
-    return sqrt(sum(square(a), axis=axis, keepdims=keepdims))
+
+def to_numpy(a: Array) -> np.ndarray:
+    return np.array(a)
+
+
+norm = mx.linalg.norm
+# def norm(a: Array, axis: Axes = None, dtype: DType = None, keepdims: bool = False, **kwargs) -> Array:
+#     return sqrt(sum(square(a), axis=axis, keepdims=keepdims))
 
 def median(a: ArrayLike, axis: Axes = ..., dtype: DType = ..., keepdims: bool = ..., **kwargs) -> Array:
     raise NotImplementedError()

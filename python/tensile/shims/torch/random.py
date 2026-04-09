@@ -43,6 +43,14 @@ def permutation(size: int, **kwargs) -> Array:
     kwargs.setdefault('device', torch.get_default_device())
     return torch.randperm(size, **kwargs)
 
+def randint(low: int, high: int, shape: ShapeLike, device=None) -> Array:
+    if device is None: device = torch.get_default_device()
+    return torch.randint(low, high, to_shape(shape), device=device)
+
+def bernoulli(p: float, shape: ShapeLike, device=None) -> Array:
+    if device is None: device = torch.get_default_device()
+    return torch.bernoulli(torch.broadcast_to(torch.tensor(p, device=device), size=to_shape(shape)))
+
 # noinspection PyShadowingNames
 def seed(seed: int) -> None:
     torch.manual_seed(seed)
