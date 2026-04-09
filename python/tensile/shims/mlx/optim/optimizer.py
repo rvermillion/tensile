@@ -137,7 +137,7 @@ class MLXOptimizer(Optimizer[Batch]):
 
             loss, grads = loss_and_grad_fn(batch)
 
-            # ten.debug_eval(loss, grads)
+            ten.eval(loss, grads)
 
             if grad_handlers:
                 flat_grads = tree.flatten(grads)
