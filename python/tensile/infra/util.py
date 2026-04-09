@@ -213,7 +213,7 @@ def tie_call(cls: type, slot: str):
         raise TypeError(f'Cannot tie __call__ to member [{slot}]: {member!r}')
 
 
-def join_str(*args: str, sep: str = ', ') -> str:
+def join_str(*args: str|None, sep: str = ', ') -> str:
     return sep.join(arg for arg in args if arg)
 
 
