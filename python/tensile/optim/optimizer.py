@@ -654,8 +654,8 @@ class SGDConfig(OptimizerConfig):
         return coerce(OptimizerSchedule, spec)
 
     algorithm: ClassVar[str] = 'sgd'
-    schedule_names = (*Optimizer.schedule_names, 'momentum', 'weight_decay', 'dampening')
-    hyperparameter_names = ('nesterov',)
+    # schedule_names = (*Optimizer.schedule_names)
+    hyperparameter_names = ('nesterov', 'momentum', 'weight_decay', 'dampening')
 
 
 
