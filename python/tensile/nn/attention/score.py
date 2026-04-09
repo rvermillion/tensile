@@ -17,13 +17,13 @@ class AttentionScores(RootObject):
     sumexp: Array     # (B, *H, Q, 1)
     values: Array     # (B, *H, Q, D_v)
 
-    def __init__(self, queries: Array, qs: slice, v_dim: int, dtype: DType = None):
+    def __init__(self, queries: Array, qs: slice, v_dim: int, initial_max: Array = None, dtype: DType = None):
         # We initialize the max, sum and values. Broadcasting will do its magic when the first logits and values
         # are added to the accumulator.
         if dtype is None: dtype = queries.dtype
         self.queries = queries
         self.qs = qs
-        self.max = ten.array(-ten.inf, dtype=dtype)
+        self.max = ten.array(-ten.inf, dtype=dtype) if initial_max is None else initial_max
         self.sumexp = ten.array(0., dtype=dtype)
         self.values = ten.array(0., dtype=dtype)
         # self.values = ten.zeros((v_dim, ), dtype=dtype)
@@ -132,7 +132,6 @@ class AttentionScores(RootObject):
                     logits = masker(logits, qs, kvs)
                     self.add_masked(logits, values)
 
-    @property
     def out(self) -> Array:
         """
         Compute the final output of the score accumulator.

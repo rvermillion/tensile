@@ -96,7 +96,7 @@ class CustomAttend(Attend):
 
             scores.add_kvs(keys_t, values, kvs, masker=masker, scorer=score, **extra)
 
-        return scores.out
+        return scores.out()
 
     def build_call(self, mode: CompiledModule.Mode, **options) -> AttendFunction:
         tile_size = self.tile_size
@@ -135,7 +135,7 @@ class CustomAttend(Attend):
 
                 scores.add_kvs(keys_t, values, kvs, masker=masker, scorer=score, **extra)
 
-                return scores.out
+                return scores.out()
 
         else:
             q_tile_size, k_tile_size = tile_size
@@ -173,7 +173,7 @@ class CustomAttend(Attend):
 
                     scores.add_kvs(keys_t, values, kvs, masker=masker, scorer=score, **extra)
 
-                    return scores.out
+                    return scores.out()
 
                 q_tiles = []
                 for i in range(0, Q, q_tile_size):
@@ -198,7 +198,7 @@ class CustomAttend(Attend):
 
                         scores_i.add_kvs(kt_j, v_j, kvs, masker=masker, scorer=score, **extra)
 
-                    q_tiles.append(ten.as_type(scores_i.out, queries.dtype))
+                    q_tiles.append(ten.as_type(scores_i.out(), queries.dtype))
 
                 return ten.concatenate(q_tiles, axis=-2)
 

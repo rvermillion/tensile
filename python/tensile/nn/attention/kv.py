@@ -112,6 +112,9 @@ class KVSequence(RootObject, Storable):
         segment = KVSegment(start, keys, values)
         return segment
 
+    def eval(self) -> None:
+        pass
+
     def _store_arrays(self, arrays: dict, prefix: str = ''):
         keys, values = self.fetch_kv()
         arrays[prefix + 'keys'] = keys
@@ -408,7 +411,7 @@ class KVArray(KVSequence):
         else:
             if end < start:
                 raise ValueError(f'end ({end}) must be None or >= start {start}')
-            if end > self.batch_count:
+            if end > self.batch_count:  # > 1:
                 raise ValueError(f'end ({end}) must be None or <= batch count {self.batch_count}')
         if start == 0 and end == self.batch_capacity:
             return full_slice
@@ -546,6 +549,9 @@ class KVArray(KVSequence):
         scores = self.batch_mask_scores(scores, call)
         return scores
 
+    def eval(self) -> None:
+        ten.eval(self.keys, self.values)
+
 
 class KVBuffer(KVArray):
 
@@ -675,6 +681,11 @@ class KVBuffer(KVArray):
                 self.set_kvs(kvs, keys[b], values[b])
 
     def set_kvs(self, kvs: Selector, keys: Array, values: Array) -> None:
+        # B = keys.shape[0]
+        # if B > self.batch_capacity and self.batch_capacity == 1:
+        #     self.keys = ten.broadcast_to(self.keys, shape=(B,) + self.keys.shape[1:])
+        #     self.values = ten.broadcast_to(self.values, shape=(B,) + self.values.shape[1:])
+
         self.keys[kvs] = keys
         self.values[kvs] = values
 
@@ -702,6 +713,81 @@ class KVBuffer(KVArray):
     def to_segment(self) -> 'KVSegment':
         keys, values = self.fetch_kv()
         return KVSegment(self.pos_start, keys, values)
+
+
+class RollingKVBuffer(KVBuffer):
+
+    __slots__ = ('size',)
+
+    size: int
+
+    def __init__(self, size: int):
+        super().__init__(0)
+        self.size = size
+
+    def grow(self, keys: Array, values: Array, kv_count: int) -> None:
+        cached_keys = self.keys
+        if cached_keys is None:
+            key_shape = keys.shape
+            added_capacity = self.size
+            B, *head_shape = key_shape[:-2]
+            batch_capacity = B
+            k_head_dim = key_shape[-1]
+            v_head_dim = values.shape[-1]
+            k_shape = (batch_capacity, *head_shape, added_capacity, k_head_dim)
+            v_shape = k_shape if k_head_dim == v_head_dim else (batch_capacity, *head_shape, added_capacity, v_head_dim)
+            self.fire_grow(0, added_capacity)
+            self.keys = ten.zeros(k_shape, dtype=keys.dtype)
+            self.values = ten.zeros(v_shape, dtype=values.dtype)
+            self.batch_count = B
+            self.kv_capacity = added_capacity
+
+    def update(self, keys: Array, values: Array, *, offset: int = None, batch: AxisSelector = None) -> None:
+        B = keys.shape[0]
+        n_keys = keys.shape[-2]
+        pos_end = self.pos_end
+        if offset is None:
+            offset = pos_end
+            grow_keys = n_keys
+        else:
+            trim = pos_end - offset
+            if trim < 0:
+                raise ValueError(f'Offset must be None or less than or equal to {self.pos_end}')
+            grow_keys = n_keys - trim
+
+        self.grow(keys, values, grow_keys)
+
+        self.set_pos_end(offset + n_keys)
+
+        batch_masker = self.batch_masker
+        if batch_masker is None:
+
+            size = self.size
+
+            if offset >= size:
+                pos_start = offset % size
+            else:
+                pos_start = offset
+            pos_end = pos_start + n_keys
+            if pos_end > size:
+                pos_end = pos_end % size
+                partial = size - pos_start
+                kvs = self.select(pos_start=pos_start, pos_end=self.size, batch=batch, batch_end=B)
+                self.set_kvs(kvs, keys[..., :partial, :], values[..., :partial, :])
+
+                kvs = self.select(pos_start=0, pos_end=pos_end, batch=batch, batch_end=B)
+                self.set_kvs(kvs, keys[..., partial:, :], values[..., partial:, :])
+
+            else:
+                kvs = self.select(pos_start=pos_start, pos_end=pos_end, batch=batch, batch_end=B)
+
+                self.set_kvs(kvs, keys, values)
+        else:
+            raise NotImplementedError("Batch masker is not supported for RollingKVBuffer")
+            # for b in range(B):
+            #     pos_start = batch_masker.get_pos_end(b)
+            #     kvs = self.select(pos_start=pos_start, pos_end=pos_start+n_keys, batch=b)
+            #     self.set_kvs(kvs, keys[b], values[b])
 
 
 KVSegmentId = tuple[int, ...]
