@@ -966,7 +966,7 @@ def flatten(
 
 # noinspection PyShadowingNames
 def flatdict(
-    tree: Tree,
+    tree: Tree[T],
     prefix: str = "",
     is_leaf: TreePredicateFunction = None,
     include: TreePredicateFunction = None,
@@ -974,7 +974,7 @@ def flatdict(
     include_intermediate: bool = False,
     parent_first: bool = True,
     traverser: Traverser = None,
-) -> dict[str, Tree[T]]:
+) -> dict[str, T]:
     if traverser is None:
         traverser = Traverser(is_leaf=is_leaf, include_intermediate=include_intermediate, include=include, descend=descend, parent_first=parent_first)
     # noinspection PyTypeChecker
