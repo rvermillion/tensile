@@ -226,6 +226,7 @@ class CallMode(enum.Enum):
     eval = 0
     train = 1
     compiled = 2
+    debug = 3
 
     def is_eval(self):
         return self is CallMode.eval
@@ -235,6 +236,19 @@ class CallMode(enum.Enum):
 
     def is_compiled(self):
         return self is CallMode.compiled
+
+    def is_debug(self):
+        return self is CallMode.debug
+
+    @classmethod
+    def coerce(cls, spec: Union['CallMode', str, None]) -> 'CallMode':
+        if spec is None:
+            return CallMode.eval
+        if isinstance(spec, CallMode):
+            return spec
+        if isinstance(spec, str):
+            return CallMode[spec]
+        raise ValueError(f"Invalid CallMode specification: {spec}")
 
 
 class ModuleParent(Protocol):
@@ -389,6 +403,17 @@ class Module(Object, tree.TreeNode[ModuleTreeValue]):
         if self.call is None:
             self._initialize_call()
 
+    if TYPE_CHECKING:
+        # noinspection PyPropertyDefinition
+        @property
+        def module_mode(self) -> CallMode: ...
+
+        @module_mode.setter
+        def module_mode(self, mode: CallMode|str|None) -> None: ...
+
+    def _coerce_module_mode(self, mode: CallMode|str|None) -> CallMode:
+        return CallMode.coerce(mode)
+
     def _module_mode_changed(self, mode: CallMode, old_mode: CallMode) -> None:
         self._set_requires_grad(mode.is_train())
         self._configure_call(self._generate_call())
@@ -406,11 +431,21 @@ class Module(Object, tree.TreeNode[ModuleTreeValue]):
     def _initialize_call(self):
         self._configure_call(self._generate_call())
 
+    def _wrap_debug_call(self, call: Callable) -> Callable:
+        def debug_call(*args, **kwargs):
+            ten.eval(*args)
+            out = call(*args, **kwargs)
+            ten.eval(out)
+            return out
+
+        return debug_call
+
     def _configure_call(self, call: Callable):
         if instrument := self.instrument:
-            self.call = instrument.instrument(self, call, self.module_mode)
-        else:
-            self.call = call
+            call = instrument.instrument(self, call, self.module_mode)
+        if self.module_mode.is_debug():
+            call = self._wrap_debug_call(call)
+        self.call = call
 
     def _generate_call(self) -> Callable:
         return self.get_call(self.module_mode)
@@ -430,6 +465,16 @@ class Module(Object, tree.TreeNode[ModuleTreeValue]):
     #     def call(*args, **kwargs):
     #         return dropout(mod(*args, **kwargs))
     #     return call
+
+    if TYPE_CHECKING:
+
+        # noinspection PyPropertyDefinition
+        @property
+        def instrument(self) -> Instrument: ...
+
+        @instrument.setter
+        def instrument(self, instrument: Instrument.Like): ...
+
 
     def set_instrument(self, instrument: Instrument.Like, compose: bool = False) -> None:
         if compose:
@@ -517,6 +562,18 @@ class Module(Object, tree.TreeNode[ModuleTreeValue]):
                 set_parent(child, self, name)
                 self._children[name] = child
 
+    def set_mode(self, mode: CallMode|str, recurse: bool = True) -> Self:
+
+        def set_module_mode(mod: Module):
+            mod.module_mode = mode
+
+        if recurse:
+            self.apply_to_modules(set_module_mode, just_value=True)
+        else:
+            set_module_mode(self)
+
+        return self
+
     def train(self, training: bool = True) -> Self:
         """Set the model in or out of training mode.
 
@@ -531,19 +588,14 @@ class Module(Object, tree.TreeNode[ModuleTreeValue]):
             The module instance after updating the training mode.
         """
 
-        def set_training_mode(mod: Module):
-            mod.training = training
-
-        self.apply_to_modules(set_training_mode, just_value=True)
-
-        return self
+        return self.set_mode(CallMode.train if training else CallMode.eval)
 
     def eval(self) -> Self:
         """Set the model to evaluation mode.
 
         See :func:`train`.
         """
-        return self.train(False)
+        return self.set_mode(CallMode.eval)
 
     def apply_to_parameters(self, apply_fn: Callable = None, *, spread: bool = False, just_value: bool = False,
                             include: PredicateFunction[TreeEntry] = None) -> Self:
@@ -793,7 +845,8 @@ class Module(Object, tree.TreeNode[ModuleTreeValue]):
             dims = ''
         else:
             dims = f'[{"*" if in_dim < 0 else in_dim} -> {"*" if out_dim < 0 else out_dim}]'
-        return join_str(self.path, extra, dims)
+        mode = None if self.module_mode.is_eval() else f'mode={self.module_mode.name}'
+        return join_str(self.path, extra, mode, dims)
 
     def build_forward_context(self, model: 'Module' = None, **kwargs) -> ForwardContext:
         if model is None: model = self
