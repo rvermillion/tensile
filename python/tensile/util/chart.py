@@ -97,10 +97,10 @@ def plot_grid(
     rows = (n + cols - 1) // cols
     fig, axes = plt.subplots(rows, cols, figsize=(5 * cols, 4 * rows), squeeze=False, sharey=True)
 
+    c = 0
     for idx, (panel_title, series) in enumerate(panels.items()):
         ax = axes[idx // cols][idx % cols]
         xmax = -float('inf')
-        c = 0
         for name, values in series.items():
             values = ten.to_numpy(values)
             cnt = len(values)
