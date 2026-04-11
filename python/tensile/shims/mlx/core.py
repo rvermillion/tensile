@@ -326,7 +326,12 @@ def load_tensors(filename: str|Path, format: str = None) -> dict[str, Array]:
     if format is None: format = path.suffix[1:]
     if loader := _tensor_loaders.get(format):
         return loader(path)
-    return mx.load(path, format=format)
+    tensors = mx.load(path, format=format)
+    if isinstance(tensors, dict):
+        return tensors
+    if is_array(tensors):
+        return {path.stem: tensors}
+    raise ValueError(f'Unknown format {format!r} for file {path}')
 
 
 def _save_npz(path: Path, arrays: dict[str, Array]):
@@ -342,9 +347,10 @@ _tensor_savers = {
 }
 
 # noinspection PyShadowingBuiltins
-def save_tensors(path: str | Path, arrays: dict[str, Array], format: str = None) -> None:
-    if not isinstance(path, Path):
-        path = Path(path)
+def save_tensors(filename: str | Path, arrays: dict[str, Array], format: str = None, mkdirs: bool = False) -> None:
+    path = filename if isinstance(filename, Path) else Path(filename)
+    if mkdirs:
+        path.parent.mkdir(parents=True, exist_ok=True)
     if format is None: format = path.suffix[1:]
     if saver := _tensor_savers.get(format):
         saver(path, arrays)
