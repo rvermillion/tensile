@@ -274,7 +274,7 @@ class Experiment(StateAware):
             chart.plot_metrics(metrics, out=self.get_path(f"{prefix}metrics.png", write=True), smoothing=0.9)
             grid = {}
             for k, v in metrics.items():
-                sep = k.find(':')
+                sep = k.rfind(':')
                 if sep < 0:
                     exp = m = k
                 else:
@@ -324,7 +324,7 @@ class Experiment(StateAware):
             state['experiments'] = [exp.qname for exp in experiments]
 
     def write_prefix(self) -> str:
-        return self.descriptor
+        return self.name
 
     def write_output(self, msg: str, *, echo: bool = True, prefix: str = None, passthru: bool = True):
         prefixed_msg = msg if prefix is None else prefix + ': ' + msg
