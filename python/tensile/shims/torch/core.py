@@ -94,7 +94,7 @@ from torch import (
     isinf, isnan, isfinite,
     add, subtract, multiply, divide, pow,
     matmul,
-    minimum, clip,
+    clip,
     argmin, argmax,
     floor, floor_divide,
     sort, where,
@@ -127,10 +127,14 @@ def eval(*args) -> None:
 
 debug_eval = eval
 
+warn_device = True
+
 # noinspection PyShadowingNames
 def array(data, *args, **kwargs) -> Array:
+    global warn_device
     x = ensure(data, *args, **kwargs)
-    if x.device.type != 'mps':
+    if warn_device and x.device.type != 'mps':
+        warn_device = False
         print('Non-MPS device detected. Consider using MPS for better performance.')
     return x
 
@@ -372,6 +376,8 @@ def select(a: Array, *, where: Array = None) -> Array:
 def maximum(a: ArrayLike, b: ArrayLike) -> Array:
     return torch.maximum(ensure(a), ensure(b))
 
+def minimum(a: ArrayLike, b: ArrayLike) -> Array:
+    return torch.minimum(ensure(a), ensure(b))
 
 # noinspection PyShadowingBuiltins
 def sum(a: ArrayLike, axis: Axes = None, keepdims: bool = False, dtype: DType = None) -> Array:
@@ -386,6 +392,17 @@ def norm(a: ArrayLike, ord:int|str|None=None, axis: Axes = None, keepdims: bool 
 # noinspection PyShadowingBuiltins
 def prod(a: ArrayLike, axis: Axes = None, keepdims: bool = False, dtype: DType = None) -> Array:
     return torch.prod(ensure(a), dim=axis, keepdim=keepdims, dtype=dtype)
+
+
+def index_add(x: Array, ind: Array, values: ArrayOrScalar, *, axis: int = 0) -> Array:
+    return torch.index_add(x, axis, ind, ensure(values))
+
+
+def one_hot(ind: Array, num_classes: int, *, dtype: DType = None) -> Array:
+    x = F.one_hot(ind, num_classes=num_classes)
+    if dtype is not None:
+        return x.to(dtype)
+    return x
 
 
 # noinspection PyShadowingBuiltins
@@ -562,7 +579,7 @@ def save_tensors(filename: str|Path, arrays: dict[str, Array], format: str = Non
     if saver := tensor_savers.get(format):
         saver(filename, arrays)
     else:
-        raise ValueError(f'Unknown format {format}')
+        raise ValueError(f'Unknown format [{format}]: {filename}')
 
 from . import fast, functional, random
 

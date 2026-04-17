@@ -55,7 +55,7 @@ class Representable:
         return ''
 
     def _repr_args(self, **options) -> str:
-        return ', '.join(map(repr, self._repr_arg_items(**options)))
+        return ', '.join(map(str, self._repr_arg_items(**options)))
 
     # noinspection PyMethodMayBeStatic,PyUnusedLocal
     def _repr_arg_items(self, **options) -> Iterable[Any]:

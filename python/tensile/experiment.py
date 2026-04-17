@@ -1,15 +1,23 @@
 #  Copyright (c) 2026. Richard Vermillion. All Rights Reserved.
+from collections import defaultdict
+
 import json
 
 import time
 from pathlib import Path
 
+import yaml
+
 from .common import *
 from .nn import Module
-from .util.buffer import ArrayBuffer
+from .util import plot
+from .util.load import load
+from .util.metric import Metric, ArrayMetric
+from .util.state import StateAware
 
 
 Params = dict[str, Any]
+ReadOnlyParams = Mapping[str, Any]
 
 
 def update_params(orig: Params, new: Params, inplace: bool = False) -> Params:
@@ -33,24 +41,12 @@ def coerce_params(spec: Any, params: Params = None) -> Params:
     return params
 
 
-class StateAware(Object):
-
-    __slots__ = ()
-
-    def state_dict(self) -> dict[str, Any]:
-        state = {}
-        self._add_state(state)
-        return state
-
-    def _add_state(self, state: dict[str, Any]):
-        pass
-
-
 class Experiment(StateAware):
 
-    __slots__ = ('name', 'qname', 'descriptor', 'parent', 'params', 'param_defaults',
-                 'experiments', 'metrics', 'seed',
-                 'work_dir', 'output')
+    __slots__ = ('name', 'qname', 'descriptor', 'parent',
+                 'params', 'all_params', 'unflat_params', 'arch',
+                 'experiments', 'metrics', 'seed', 'start_time', 'end_time',
+                 'work_dir', 'path', 'model_dir', 'output')
 
     name: Annotated[str, field(
         doc='The name of the experiment'
@@ -66,45 +62,99 @@ class Experiment(StateAware):
     )]
     params: Annotated[Params, field(
         doc='The parameters for this experiment',
-        coerce=coerce_params,
         default_factory=dict,
     )]
-    param_defaults: Annotated[Params, field(
-        doc='The defaults to use for unset parameters',
+    all_params: Annotated[Params, field(
+        doc='The parameters for this experiment, including inherited parameters',
+    )]
+    unflat_params: Annotated[Params, field(
+        doc='The parameters for this experiment',
     )]
     experiments: Annotated[list['Experiment'], field(
         doc='The list of sub-experiments for this experiment, if any',
         default_factory=list,
     )]
-    metrics: Annotated[dict[str, Array], field(
+    metrics: Annotated[dict[str, Metric], field(
         default_factory=dict
     )]
-    seed: Annotated[Optional[int], field(
+    arch: Annotated[str, field(
+        doc='The model architecture',
+        default='',
+    )]
+    seed: Annotated[int, field(
         doc='The random seed to set before running the bucket',
     )]
     output: Annotated[list[str], field(
         doc='The list of lines output by this experiment',
         default_factory=list,
     )]
+    start_time: Annotated[Optional[float], field(
+        doc='The timestamp when the experiment started',
+    )]
+    end_time: Annotated[Optional[float], field(
+        doc='The timestamp when the experiment ended',
+    )]
+    work_dir: Annotated[Path, field(
+        doc='The path to the work directory',
+    )]
+    path: Annotated[Path, field(
+        doc='The path to the experiment directory',
+    )]
+    model_dir: Annotated[Path, field(
+        doc='The directory to store models in',
+    )]
 
-    work_dir: Annotated[Path, field()]
+    def _coerce_model_dir(self, spec: Any) -> Path:
+        return self.work_dir / spec
+
+    def _lazy_model_dir(self) -> Path:
+        return self.work_dir / f'models/{self.name}'
 
     def _lazy_work_dir(self) -> Path:
-        if parent := self.parent:
-            parent_dir = parent.work_dir
-        else:
-            parent_dir = Path('./work').absolute()
+        return Path('./work').absolute()
 
-        work_dir = parent_dir / self.name
+    def _lazy_path(self) -> Path:
+        if parent := self.parent:
+            parent_dir = parent.path
+        else:
+            parent_dir = self.work_dir
+
+        path = parent_dir / self.name
         # if not work_dir.exists():
         #     work_dir.mkdir(parents=True)
-        return work_dir
+        return path
 
-    def _lazy_param_defaults(self) -> Params:
-        return self.fixed_param_defaults()
+    def _lazy_all_params(self) -> Params:
+        params = {}
+        if parent := self.parent:
+            params.update(parent.all_params)
 
-    def _coerce_param_defaults(self, spec: Any) -> Params:
-        return coerce_params(spec, self.fixed_param_defaults())
+        params.update(self.params)
+
+        if defaults := self.fixed_param_defaults():
+            for name, value in defaults.items():
+                params.setdefault(name, value)
+        return params
+
+    def _coerce_params(self, spec: Any) -> Params:
+        params = {}
+
+        if spec is None: return params
+
+        if isinstance(spec, str):
+            spec = Path(spec)
+        if isinstance(spec, Path):
+            spec = load(spec)
+        if isinstance(spec, Mapping):
+            spec = tree.flatdict(spec)
+            params.update(spec)
+        else:
+            raise ValueError(f"Invalid parameter specification: {spec}")
+
+        return params
+
+    def _lazy_unflat_params(self) -> Params:
+        return tree.unflatdict(self.all_params)
 
     def _lazy_descriptor(self) -> str:
         desc_params = self.descriptor_params
@@ -114,95 +164,131 @@ class Experiment(StateAware):
 
     def _lazy_qname(self) -> str:
         if parent := self.parent:
-            return parent.qname + '.' + self.name
+            return parent.qname + '/' + self.name
         return self.name
+
+    def _lazy_seed(self) -> int:
+        seed = self.params.get('seed', 0)
+        if not seed:
+            if parent := self.parent:
+                seed = parent.seed
+        return seed
 
     @property
     def descriptor_params(self) -> dict[str, Any]:
         params = self.params
         bucket_keys = params.keys()
-        defaults = self.param_defaults
         abbrevs = self.hyperparam_abbrevs
-        return {
-            abbrevs.get(pk, pk): params[pk]
-            for pk in bucket_keys
-            if pk in params and (pk not in defaults or params[pk] != defaults[pk])
-        }
+        return {abbrevs.get(pk, pk): params[pk] for pk in bucket_keys}
 
-    def set_param(self, name: str, value: Any) -> None:
-        old_value = self.params.get(name)
-        if old_value != value:
-            self.params[name] = value
-            self.param_changed(name, value, old_value)
+    @property
+    def elapsed_time(self) -> Optional[float]:
+        if self.start_time is None or self.end_time is None:
+            return None
+        return self.end_time - self.start_time
 
-    def param_changed(self, name: str, value: Any, old_value: Any) -> None:
-        pass
+    # def set_param(self, name: str, value: Any) -> None:
+    #     old_value = self.params.get(name)
+    #     if old_value != value:
+    #         self.params[name] = value
+    #         self.param_changed(name, value, old_value)
+    #
+    # def param_changed(self, name: str, value: Any, old_value: Any) -> None:
+    #     pass
+    #
+    # def get_param_defaults_with_prefix(self, prefix: str) -> Params:
+    #     if parent := self.parent:
+    #         params = parent.get_param_defaults_with_prefix(prefix)
+    #     else:
+    #         params = {}
+    #     plen = len(prefix)
+    #     for name, value in self.param_defaults.items():
+    #         if name.startswith(prefix):
+    #             params[name[plen:]] = value
+    #     return params
 
-    def get_param_defaults_with_prefix(self, prefix: str) -> Params:
-        if parent := self.parent:
-            params = parent.get_param_defaults_with_prefix(prefix)
-        else:
-            params = {}
+    # def all_params(self, flat: bool = None) -> Params:
+    #     params = self.get_params_with_prefix('')
+    #     if flat is None:
+    #         return params
+    #     params = tree.flatdict(params)
+    #     if not flat:
+    #         params = tree.unflatten(params.items())
+    #         if not isinstance(params, dict):
+    #             raise ValueError(f"Expected dict, got {type(params).__name__}")
+    #     return params
+
+    def get_params_with_prefix(self, prefix: str) -> Params:
+        # if parent := self.parent:
+        #     params = parent.get_params_with_prefix(prefix)
+        # else:
+        #     params = {}
+        params = {}
         plen = len(prefix)
-        for name, value in self.param_defaults.items():
+        for name, value in self.all_params.items():
             if name.startswith(prefix):
                 params[name[plen:]] = value
-        return params
-
-    def get_params_with_prefix(self, prefix: str, with_defaults: bool = True) -> Params:
-        if parent := self.parent:
-            params = parent.get_params_with_prefix(prefix, with_defaults=False)
-        else:
-            params = {}
-        plen = len(prefix)
-        for name, value in self.params.items():
-            if name.startswith(prefix):
-                params[name[plen:]] = value
-        if with_defaults:
-            for name, value in self.get_param_defaults_with_prefix(prefix).items():
-                params.setdefault(name, value)
+        # if with_defaults:
+        #     for name, value in self.get_param_defaults_with_prefix(prefix).items():
+        #         params.setdefault(name, value)
         return params
 
     def get_param(self, name: str, default: Any = None) -> Any:
-        if params := self.params:
+        if params := self.all_params:
             if name in params:
                 return params[name]
-        if default is None:
-            default = self.param_defaults.get(name)
-        if parent := self.parent:
-            return parent.get_param(name, default)
+        # if default is None:
+        #     default = self.param_defaults.get(name)
+        # if parent := self.parent:
+        #     return parent.get_param(name, default)
         return default
 
     def collect_params(self, name: str, params: dict[str, Any]) -> None:
-        if defaults := self.param_defaults.get(name):
-            if isinstance(defaults, dict):
-                for k, v in defaults.items():
-                    params.setdefault(k, v)
+        raise NotImplementedError()
+        # if defaults := self.param_defaults.get(name):
+        #     if isinstance(defaults, dict):
+        #         for k, v in defaults.items():
+        #             params.setdefault(k, v)
         if own := self.params.get(name):
             if isinstance(own, dict):
                 params.update(own)
 
     def get_params(self, name: str) -> dict[str, Any]:
+        raise NotImplementedError()
         params = {}
         if parent := self.parent:
             parent.collect_params(name, params)
         self.collect_params(name, params)
         return params
 
+    def count_experiments(self, depth: int = 1) -> int:
+        if depth == 0:
+            return 1
+        elif depth == 1:
+            return len(self.experiments)
+        elif depth > 1:
+            count = 0
+            for experiment in self.experiments:
+                count += experiment.count_experiments(depth - 1)
+            return count
+        return 0
+
     def add_experiment(self, **spec) -> 'Experiment':
         experiment = Experiment.coerce(parent=self, **spec)
         self.experiments.append(experiment)
         return experiment
 
-    def add_metric(self, name: str, metric: Array|ArrayBuffer):
-        if isinstance(metric, ArrayBuffer):
-            self.metrics[name] = metric.fetch()
-        else:
+    def add_metric(self, metric: Metric, name: str = None):
+        if name is None:
+            name = metric.name
+        if isinstance(metric, Metric):
             self.metrics[name] = metric
+        else:
+            raise ValueError(f"Invalid metric type for '{name}': {type(metric)}")
         if parent := self.parent:
-            parent.add_metric(self.name + ':' + name, metric)
+            parent.add_metric(metric, self.name + '/' + name)
 
-    def get_metric(self, name: str) -> Optional[Array]:
+    def get_metric(self, name: str) -> Optional[Metric]:
         return self.metrics.get(name)
 
     def batch_data(self, b: int) -> Iterable[tuple[Array, Array]]:
@@ -211,7 +297,7 @@ class Experiment(StateAware):
         raise NotImplementedError()
 
     def get_path(self, rel: str, write: bool = False) -> Path:
-        path = self.work_dir / rel
+        path = self.path / rel
         if write:
             path.parent.mkdir(parents=True, exist_ok=True)
         return path
@@ -228,7 +314,7 @@ class Experiment(StateAware):
         if isinstance(save, Path):
             path = save
         elif name is not None:
-            path = self.get_path(name)
+            path = (self.model_dir / name).with_suffix('.safetensors')
         else:
             path = None
 
@@ -250,45 +336,109 @@ class Experiment(StateAware):
         self.finish()
 
     def start(self):
+        self.start_time = time.time()
         self.metrics.clear()
         self.header(f'Experiment[{self.descriptor}] Starting')
 
     def run_self(self):
-        if self.seed is not None:
+        if self.seed:
             ten.random.seed(self.seed)
 
     def run_experiments(self):
         for exp in self.experiments:
-            exp.run()
+            if self.before_child_start(exp):
+                exp.run()
+                self.after_child_finish(exp)
+
+    def before_child_start(self, child: 'Experiment') -> bool:
+        return True
+
+    def after_child_finish(self, child: 'Experiment') -> None:
+        pass
+
+    def plot_charts(self, metrics: dict[str, Metric] = None, *,
+                    prefix: str = '', suffix: str = '',
+                    # grid: dict[str, dict[str, Array]] = None,
+                    with_grid: bool = True):
+        if metrics is None: metrics = self.metrics
+        if metrics:
+            # if charts := self.get_param('charts'):
+            #     for name, spec in charts.items():
+            #         pass
+            #     return
+            array_metrics: dict[str, Array] = {}
+
+            metrics_by_name = defaultdict(dict[str, Metric])
+
+            ylim = dict(top=4., bottom=0.)
+
+            for name, metric in metrics.items():
+                if isinstance(metric, ArrayMetric):
+                    array_metrics[name] = metric.array
+                metrics_by_name[metric.name][name] = metric
+
+            if len(metrics) <= 8:
+                chart = plot.Chart.from_metrics(metrics, smoothing=0.9, ylim=ylim)
+
+                chart.plot(out=self.get_path(f"{prefix}metrics{suffix}.png", write=True))
+
+            if with_grid:
+
+                d = 1
+                rows = self.count_experiments(d)
+                while rows == 1:
+                    d += 1
+                    rows = self.count_experiments(d)
+                    if rows == 0:
+                        rows = 1
+                        break
+
+                chart = plot.Chart.split_grid(metrics, smoothing=0.9, rows=rows, ylim=ylim)
+                chart.plot(out=self.get_path(f"{prefix}grid{suffix}.png", write=True))
+
+                for name, grid_metrics in metrics_by_name.items():
+                    chart = plot.Chart.split_grid(grid_metrics, title=name, smoothing=0.9, rows=rows, ylim=ylim)
+                    chart.plot(out=self.get_path(f"{prefix}grid-{name}{suffix}.png", write=True))
+
+    def load_metrics(self, path: Path = None) -> dict[str, Metric]:
+        if path is None: path = self.get_path(f"metrics.safetensors")
+        if path.exists():
+            metrics = {}
+            arrays = ten.load_tensors(path)
+            if arrays:
+                for name, array in arrays.items():
+                    if name.endswith('.steps'):
+                        name = name[:-6]
+                        steps = array.tolist()
+                        values = arrays[name + '.values'].tolist()
+                        if isinstance(steps, list) and isinstance(values, list):
+                            metrics[name] = Metric.from_steps(name, steps, values)
+                        else:
+                            raise ValueError(f"Invalid metric format for {name}: steps={type(steps)}, values={type(values)}")
+                    elif not name.endswith('.values'):
+                        metrics[name] = Metric.from_array(name, array)
+            return metrics
+        else:
+            raise ValueError('No metrics found at: ' + str(path))
+
+    def save_metrics(self, metrics: dict[str, Metric] = None):
+        if metrics is None: metrics = self.metrics
+        if metrics:
+            tensors: dict[str, Array] = {}
+            for name, metric in metrics.items():
+                metric.add_tensors(tensors, name)
+
+            if tensors:
+                ten.save_tensors(self.get_path(f"metrics.safetensors", write=True), tensors)
 
     def finish(self):
-        work_dir = self.work_dir
+        self.end_time = time.time()
         prefix = ''  # self.qname + '-'
 
-        if metrics := self.metrics:
-            from tensile.util import chart
+        self.plot_charts()
+        self.save_metrics()
 
-            # if not work_dir.exists():
-            #     work_dir.mkdir(parents=True)
-
-            chart.plot_metrics(metrics, out=self.get_path(f"{prefix}metrics.png", write=True), smoothing=0.9)
-            grid = {}
-            for k, v in metrics.items():
-                sep = k.rfind(':')
-                if sep < 0:
-                    exp = m = k
-                else:
-                    exp = k[:sep]
-                    m = k[sep+1:]
-                if exp in grid:
-                    grid[exp][m] = v
-                else:
-                    grid[exp] = {m: v}
-            if len(grid) > 1:
-                chart.plot_grid(grid, out=self.get_path(f"{prefix}grid.png", write=True), smoothing=0.9)
-            ten.save_tensors(self.get_path(f"{prefix}metrics.safetensors", write=True), metrics)
-
-            self.metrics.clear()
+        self.metrics.clear()
 
         self.header(f'Experiment[{self.descriptor}] Finished')
         if output := self.output:
@@ -298,8 +448,11 @@ class Experiment(StateAware):
 
             self.output.clear()
 
+        state = self.state_dict()
         with open(self.get_path(f"{prefix}experiment.json", write=True), 'w') as f:
-            json.dump(self.state_dict(), f, indent=2)
+            json.dump(state, f, indent=2)
+        with open(self.get_path(f"{prefix}experiment.yaml", write=True), 'w') as f:
+            yaml.dump(state, f, indent=2)
 
     def fixed_param_defaults(self) -> Params:
         return {}
@@ -315,13 +468,19 @@ class Experiment(StateAware):
         state.update(
             descriptor=self.descriptor,
             seed=self.seed,
-            params=self.get_params_with_prefix(''),
-            work_dir=str(self.work_dir),
+            params=self.unflat_params,
+            path=str(self.path),
         )
         if metrics := self.metrics:
             state['metrics'] = list(metrics)
         if experiments := self.experiments:
             state['experiments'] = [exp.qname for exp in experiments]
+        if start_time := self.start_time:
+            state['start_time'] = start_time
+            if end_time := self.end_time:
+                state['end_time'] = end_time
+                state['elapsed_time'] = end_time - start_time
+        return state
 
     def write_prefix(self) -> str:
         return self.name
@@ -331,7 +490,7 @@ class Experiment(StateAware):
         self.output.append(prefixed_msg)
         if passthru:
             if parent := self.parent:
-                prefix = self.write_prefix() if prefix is None else self.write_prefix() + '.' + prefix
+                prefix = self.write_prefix() if prefix is None else self.write_prefix() + '/' + prefix
                 parent.write_output(msg, echo=echo, prefix=prefix)
                 return
         if echo: print(prefixed_msg)
@@ -361,7 +520,8 @@ class Experiment(StateAware):
 
 class CachedInputExperiment(Experiment):
 
-    __slots__ = ('in_chunk_size', 'in_dim', 'chunks_per_epoch')
+    __slots__ = ('in_chunk_size', 'in_dim', 'chunks_per_epoch', 'input_dir',
+                 'time_per_epoch')
 
     in_chunk_size: Annotated[int, field(
         doc='The size of each input chunk',
@@ -374,25 +534,63 @@ class CachedInputExperiment(Experiment):
         doc='The number of chunks to generate per epoch',
         default=10,
     )]
+    time_per_epoch: Annotated[float, field(
+        doc='The amount time to generate chunks for an epoch',
+        default=0.0,
+    )]
+    input_dir: Annotated[Path, field(
+        doc='The directory to store input chunks',
+    )]
+
+    def _coerce_input_dir(self, spec: Any) -> Path:
+        return self.work_dir / spec
+
+    def _lazy_input_dir(self) -> Path:
+        return self.work_dir / f'inputs/{self.name}'
+
+    def get_module(self, spec: Any, name: str = None, save: bool | Path = True) -> Module:
+        if save is True and name is not None:
+            save = (self.model_dir/ name).with_suffix('.safetensors')
+        return super().get_module(spec, name, save)
 
     def generate_input_chunk(self) -> Array:
         return ten.random.normal(scale=2., shape=(self.in_chunk_size, self.in_dim))
 
-    def get_input_chunk(self, i: int, name: str = 'inputs') -> Array:
-        input_file = self.work_dir / f"{name}-{i}.safetensors"
+    def get_input_chunk(self, i: int, name: str = 'inputs', key: str = 'input') -> Array:
+        input_file = self.input_dir / f"{name}-{i}.safetensors"
         in_dim = self.in_dim
         if input_file.exists():
             arrays = ten.load_tensors(input_file)
         else:
             arrays = {
-                'input': self.generate_input_chunk()
+                key: self.generate_input_chunk()
             }
+            input_file.parent.mkdir(parents=True, exist_ok=True)
             ten.save_tensors(input_file, arrays)
         ten.eval(arrays)
-        inputs = arrays['input']
+        inputs = arrays[key]
         if inputs.shape[-1] != in_dim:
              raise ValueError(f'Expected input chunk to have shape (..., {in_dim}), got: {inputs.shape}')
         return inputs
+
+    def iter_batch(self, b: int) -> Iterable[Array]:
+        chunk_size = self.in_chunk_size
+        time_per_epoch = self.time_per_epoch
+        if time_per_epoch > 0.0:
+            i = 0
+            end_time = time.time() + time_per_epoch
+            while True:
+                chunk = self.get_input_chunk(i)
+                for s in range(0, chunk_size, b):
+                    if time.time() > end_time:
+                        return
+                    yield chunk[s:s+b]
+                i += 1
+        else:
+            for i in range(self.chunks_per_epoch):
+                chunk = self.get_input_chunk(i)
+                for s in range(0, chunk_size, b):
+                    yield chunk[s:s+b]
 
 
 @provides(Experiment, 'teacher')
@@ -405,17 +603,13 @@ class TeacherExperiment(CachedInputExperiment):
     )]
 
     def _coerce_teacher(self, spec: Any) -> Module:
-        return self.get_module(spec, 'teacher.safetensors')
+        return self.get_module(spec, 'teacher')
 
     def batch_data(self, b: int) -> Iterable[tuple[Array, Array]]:
         teacher = self.teacher
-        chunk_size = self.in_chunk_size
-        for i in range(self.chunks_per_epoch):
-            chunk = self.get_input_chunk(i)
-            for s in range(0, chunk_size, b):
-                inputs = chunk[s:s + b]
-                targets = teacher(inputs)
-                yield inputs, targets
+        for inputs in self.iter_batch(b):
+            targets = teacher(inputs)
+            yield inputs, targets
 
     def start(self):
         super().start()
@@ -514,6 +708,9 @@ class Sweep(StateAware):
     def iter_params(self) -> Iterable[Params]:
         raise NotImplementedError()
 
+    def __len__(self) -> int:
+        return len(list(self.iter_params()))
+
     def __add__(self, other) -> 'Sweep':
         if not isinstance(other, Sweep):
             raise TypeError(f"Unsupported operand type for *: 'Sweep' and '{type(other).__name__}'")
@@ -527,6 +724,14 @@ class Sweep(StateAware):
     @classmethod
     def _coerce_from_sequence(cls, spec: Sequence, /, **kwargs) -> 'Sweep':
         return SequenceSweep(sweeps=spec, **kwargs)
+
+    @classmethod
+    def all(cls, *sweeps: SweepLike) -> 'Sweep':
+        if sweeps:
+            if len(sweeps) == 1:
+                return cls.coerce(sweeps[0])
+            return SequenceSweep(sweeps=sweeps)
+        return null_sweep
 
     @classmethod
     def join(cls, *sweeps: SweepLike) -> 'Sweep':
@@ -567,6 +772,9 @@ class NullSweep(Sweep):
     def iter_params(self) -> Iterable[Params]:
         return {},
 
+    def __len__(self) -> int:
+        return 0
+
 
 null_sweep = NullSweep()
 
@@ -590,6 +798,9 @@ class ParamSweep(Sweep):
         for value in self.values:
             yield {param: value}
 
+    def __len__(self) -> int:
+        return len(self.values)
+
 
 @provides(Sweep, 'dict')
 class DictSweep(Sweep):
@@ -600,6 +811,9 @@ class DictSweep(Sweep):
 
     def iter_params(self) -> Iterable[Params]:
         return self.params,
+
+    def __len__(self) -> int:
+        return 1
 
 
 @provides(Sweep, 'sequence')
@@ -618,6 +832,9 @@ class SequenceSweep(Sweep):
     def iter_params(self) -> Iterable[Params]:
         for sweep in self.sweeps:
             yield from sweep.iter_params()
+
+    def __len__(self) -> int:
+        return sum(len(sweep) for sweep in self.sweeps)
 
 
 @provides(Sweep, 'join')
@@ -639,6 +856,9 @@ class JoinSweep(Sweep):
             for s in sweeps:
                 yield update_params(params, s, inplace=True)
 
+    def __len__(self) -> int:
+        return min(len(sweep) for sweep in self.sweeps)
+
 
 @provides(Sweep, 'product')
 class ProductSweep(Sweep):
@@ -659,6 +879,8 @@ class ProductSweep(Sweep):
             for right in self.right.iter_params():
                 yield update_params(left, right)
 
+    def __len__(self) -> int:
+        return len(self.left) * len(self.right)
 
 
 @provides(Experiment, 'sweep')
@@ -679,27 +901,28 @@ class SweepExperiment(Experiment):
     def run_self(self):
         super().run_self()
         spec = self.child.copy()
-        orig_params = spec.get('params', {})
+        # orig_params = spec.get('params', {})
         spec['parent'] = self
-        name = spec.get('name', 'exp')
+        # name = spec.get('name', 'exp')
+        name = self.name
         i = 0
-        for params in self.sweeps.sweep(orig_params):
-            spec['name'] = f'{name}-{i}'
+        for params in self.sweeps.sweep({}):
+            spec['name'] = "-".join(f"{k}={v}" for k, v in params.items())
             spec['params'] = params
             child = Experiment.coerce(**spec)
             self.experiments.append(child)
-            child.run()
+            # child.run()
             i += 1
 
-    def run_experiments(self):
-        # They were already run in run_self....
-        pass
+    # def run_experiments(self):
+    #     # They were already run in run_self....
+    #     pass
 
-    def add_metric(self, name: str, metric: Array | ArrayBuffer):
-        if parent := self.parent:
-            parent.add_metric(name, metric)
-        else:
-            super().add_metric(name, metric)
+    # def add_metric(self, metric: Metric, name: str = None):
+    #     if parent := self.parent:
+    #         parent.add_metric(metric, name)
+    #     else:
+    #         super().add_metric(metric, name)
 
     def _add_state(self, state: dict[str, Any]):
         super()._add_state(state)
@@ -749,21 +972,22 @@ class TrainingExperiment(Experiment):
         )
 
 
-class StudentTrainingExperiment(TrainingExperiment):
+class ModelTrainingExperiment(TrainingExperiment):
 
-    __slots__ = ('student', )
+    __slots__ = ('model', )
 
-    student: Annotated[Module, field(
-        doc='The student model to train',
+    model: Annotated[Module, field(
+        doc='The model to train',
     )]
 
-    def _coerce_student(self, spec: Any) -> Module:
-        return self.get_module(spec, "student.safetensors")
+    def _coerce_model(self, spec: Any) -> Module:
+        return self.get_module(spec, "model")
 
     def _add_state(self, state: dict[str, Any]):
         super()._add_state(state)
         state.update(
-            student=self.student.structure(),
+            model=self.model.structure(),
+            arch=self.arch,
         )
 
 

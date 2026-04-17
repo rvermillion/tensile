@@ -273,6 +273,24 @@ def is_floating(dtype: DType) -> bool:
     return mx.issubdtype(dtype, mx.floating)
 
 
+def _axis_selector(ndim: int, axis: int, select: AxisSelector) -> tuple[AxisSelector, ...]:
+    items: list[AxisSelector] = [slice(None)] * ndim
+    items[axis] = select
+    return tuple(items)
+
+
+def index_add(x: Array, ind: Array, values: ArrayOrScalar, *, axis: int = 0) -> Array:
+    if x.ndim == 1:
+        return x.at[ind].add(values)
+    else:
+        return x.at[_axis_selector(x.ndim, axis, ind)].add(values)
+
+
+def one_hot(ind: Array, num_classes: int, *, dtype: DType = None) -> Array:
+    eye = mx.eye(num_classes, dtype=dtype)
+    return eye[ind]
+
+
 # noinspection PyShadowingNames
 def select(a: Array, where: Array) -> Array:
     if where is None:

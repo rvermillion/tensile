@@ -7,6 +7,8 @@ from .. import ten
 from ..repo import Repo, repo_to_local_path
 from ..infra import coerce, meta, log
 from ..infra.types import *
+from ..util import load
+
 from .architecture import Architecture
 from .model import Model
 
@@ -14,48 +16,50 @@ from .model import Model
 M = TypeVar('M', bound=Model)
 
 
-loaders: dict[str, Callable[[Path], dict]] = {}
-
-try:
-    import yaml
-
-    def load_yaml(path: Path) -> dict:
-        with open(path, "r") as f:
-            return yaml.safe_load(f)
-
-    loaders[".yaml"] = load_yaml
-except ModuleNotFoundError:
-
-    def load_yaml(path: Path) -> dict:
-        raise ModuleNotFoundError("yaml module not found, cannot load yaml files")
-
-
-try:
-    import json
-
-    def load_json(path: Path) -> dict:
-        with open(path, "r") as f:
-            return json.load(f)
-
-    loaders[".json"] = load_json
-except ModuleNotFoundError:
-
-    def load_json(path: Path) -> dict:
-        raise ModuleNotFoundError("json module not found, cannot load yaml files")
+# loaders: dict[str, Callable[[Path], dict]] = {}
+#
+# try:
+#     import yaml
+#
+#     def load_yaml(path: Path) -> dict:
+#         with open(path, "r") as f:
+#             return yaml.safe_load(f)
+#
+#     loaders[".yaml"] = load_yaml
+# except ModuleNotFoundError:
+#
+#     def load_yaml(path: Path) -> dict:
+#         raise ModuleNotFoundError("yaml module not found, cannot load yaml files")
+#
+#
+# try:
+#     import json
+#
+#     def load_json(path: Path) -> dict:
+#         with open(path, "r") as f:
+#             return json.load(f)
+#
+#     loaders[".json"] = load_json
+# except ModuleNotFoundError:
+#
+#     def load_json(path: Path) -> dict:
+#         raise ModuleNotFoundError("json module not found, cannot load yaml files")
 
 
 def try_load_config(config_path: Path) -> Optional[dict[str, Any]]:
-    if config_path.exists():
-        if loader := loaders.get(config_path.suffix):
-            return loader(config_path)
-        else:
-            log.warn(f"Unsupported config file format: {config_path.suffix}")
-    else:
-        for suffix, loader in loaders.items():
-            config_file = config_path.with_suffix(suffix)
-            if config_file.exists():
-                return loader(config_file)
-    return None
+    return load.try_load(config_path)
+    #
+    # if config_path.exists():
+    #     if loader := loaders.get(config_path.suffix):
+    #         return loader(config_path)
+    #     else:
+    #         log.warn(f"Unsupported config file format: {config_path.suffix}")
+    # else:
+    #     for suffix, loader in loaders.items():
+    #         config_file = config_path.with_suffix(suffix)
+    #         if config_file.exists():
+    #             return loader(config_file)
+    # return None
 
 
 def load_config(model_path: Path) -> dict[str, Any]:
@@ -174,7 +178,7 @@ def _check_path(path: Path) -> Optional[Path]:
         else:
             def add_suffix(p, s):
                 return p.with_suffix(s)
-        for suffix in loaders:
+        for suffix in load.loaders:
             file = add_suffix(path, suffix)
             if file.exists():
                 return file.resolve()
@@ -214,8 +218,9 @@ def fetch_hf_config(repo: str) -> dict:
 def model_from_pretrained(name: str) -> Model:
     try:
         model_path = find_model_path(name.lower())
-        with open(model_path, "r") as f:
-            config = yaml.safe_load(f)
+        config = load.load(model_path)
+        # with open(model_path, "r") as f:
+        #     config = yaml.safe_load(f)
     except FileNotFoundError as e:
         config = None
 

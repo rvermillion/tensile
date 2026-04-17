@@ -1,7 +1,7 @@
 # Copyright © 2023 Richard Vermillion.
 import re
 from collections import defaultdict
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Any, Generic, Optional, Self, TypeVar, Union
 
 from .. import ten
@@ -981,6 +981,16 @@ def flatdict(
     return dict(traverse(tree, prefix=prefix, traverser=traverser))
 
 
+def unflatdict(tree: Mapping[str, T], prefix: str = None) -> dict[str, T]:
+    if prefix is None:
+        items = tree.items()
+    else:
+        plen = len(prefix)
+        items = ((key[plen:], value) for key, value in tree.items() if key.startswith(prefix))
+    unflat = tree_unflatten(items)
+    return unflat if isinstance(unflat, dict) else {}
+
+
 # noinspection PyShadowingNames
 def unflatten(tree: Iterable[tuple[str, T]]) -> Tree[T]:
     """Recreate a Python tree from its flat representation.
@@ -1041,6 +1051,16 @@ def unflatten(tree: Iterable[tuple[str, T]]) -> Tree[T]:
         else:
             return {k: unflatten(v) for k, v in children.items()}
     return first_value
+
+
+def setdefaults(tree: dict[str, T], /, __defaults: dict[str, T] = None, **kwargs) -> dict[str, T]:
+    if __defaults:
+        for k, v in __defaults.items():
+            tree.setdefault(k, v)
+    if kwargs:
+        for k, v in kwargs.items():
+            tree.setdefault(k, v)
+    return tree
 
 
 def reduce(fn, tree, *,

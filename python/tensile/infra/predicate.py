@@ -249,6 +249,19 @@ def all_items(pred: PredicateFunction[U]) -> PredicateFunction[Iterable[U]]:
     return any_item_pred
 
 
+def every_n(n: int, offset: int = 0) -> PredicateFunction[int]:
+    if n <= 0: raise ValueError("every must be positive")
+    offset = (n - offset) % n
+    def every_n(step: int) -> bool:
+        return step % n == offset
+    what = 'step' if n == 1 else 'steps'
+    if offset == 0:
+        name = f'every_{n}_{what}'
+    else:
+        name = f'every_{n}_{what}_offset_{offset}'
+    return name_function(every_n, name)
+
+
 class Predicate(Generic[U]):
 
     __slots__ = ('evaluate',)
@@ -1345,6 +1358,12 @@ class Predicates:
         return Predicates.is_str & describe(base, lambda p, arg: f'{arg}.endswith({s!r})')
 
     @staticmethod
+    def every_n(n: int, offset: int = 0) -> Predicate[int]:
+        if n == 1:
+            return Predicates.always
+        return Predicates.function(every_n(n, offset))
+
+    @staticmethod
     def describe(pred: Predicate[U], describe: Callable[[str], str]) -> Predicate[U]:
         return DelegatePredicate(pred, describe)
 
@@ -1370,8 +1389,10 @@ class Predicates:
         return coerce(spec)
 
     @staticmethod
-    def function(evaluate: PredicateFunction[X]) -> Predicate[X]:
-        return coerce(evaluate)
+    def function(evaluate: PredicateFunction[X], name: str = None) -> Predicate[X]:
+        if name is not None:
+            name_function(evaluate, name)
+        return Predicate(evaluate)
 
     if TYPE_CHECKING:
         @staticmethod
@@ -1446,6 +1467,7 @@ named_factories: dict[str, TransformFunction[Any, Predicate]] = {
     'ends_with': Predicates.ends_with,
     'startswith': Predicates.starts_with,
     'endswith': Predicates.ends_with,
+    'every_n': Predicates.every_n,
     'custom': spread_mapping(custom),
     'lambda': build_lambda,
 }
